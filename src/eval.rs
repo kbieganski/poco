@@ -28,7 +28,8 @@ fn eval(text: Text) -> Result<(Val, Heap)> {
 pub(super) fn eval_dbg(text: Text) -> Result<(Val, Heap)> {
     let mut proc = Process::new(text);
     while !proc.is_done() {
-        let (instr, loc) = proc.stack.get_instr(&proc.text);
+        let instr = proc.stack.get_instr(&proc.text);
+        let loc = proc.stack.get_instr_loc(&proc.text);
         eprint!("-> {instr} @ {loc} | stack: [");
         for val in proc.stack.curr_frame().vals.iter() {
             eprint!(" {val}");
@@ -665,11 +666,18 @@ impl Stack {
         frame.ip.0 as usize >= func.instr_count()
     }
 
-    /// Gets the current instruction and its source location.
-    fn get_instr<'src>(&self, text: &Text<'src>) -> (Bc<'src>, SourceLoc<'src>) {
+    /// Gets the instruction at the instruction pointer.
+    fn get_instr<'src>(&self, text: &Text<'src>) -> Bc<'src> {
         let frame = self.curr_frame();
         let func = &text[frame.func];
-        (func.instr_at(frame.ip).clone(), func.instr_loc_at(frame.ip))
+        func.instr_at(frame.ip).clone()
+    }
+
+    /// Gets the current instruction's source location.
+    fn get_instr_loc<'src>(&self, text: &Text<'src>) -> SourceLoc<'src> {
+        let frame = self.curr_frame();
+        let func = &text[frame.func];
+        func.instr_loc_at(frame.ip)
     }
 
     /// Captures the current scopes and returns their references.
@@ -821,11 +829,11 @@ impl<'src> Process<'src> {
         if self.is_done() {
             return Ok(());
         }
-        let (instr, loc) = self.stack.get_instr(&self.text);
-        self.stack.move_ip_by(1);
+        let instr = self.stack.get_instr(&self.text);
         if let Err(err) = self.eval_step(&instr) {
-            return Err(err.with_loc(loc));
+            return Err(err.with_loc(self.stack.get_instr_loc(&self.text)));
         }
+        self.stack.move_ip_by(1);
         Ok(())
     }
 
