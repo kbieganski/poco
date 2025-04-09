@@ -468,7 +468,7 @@ struct Frame {
     /// Function this frame belongs to.
     func: FuncRef,
     /// Scopes to look up variables in if not found in the current frame's scopes.
-    fallback_scopes: Box<[TableRef]>,
+    fallback_scopes: Rc<[TableRef]>,
     /// Current instruction pointer.
     ip: BcIdx,
     /// Evaluation stack for expression evaluation.
@@ -530,7 +530,7 @@ impl Stack {
     fn push_frame(
         &mut self,
         func: FuncRef,
-        fallback_scopes: &[TableRef],
+        fallback_scopes: Rc<[TableRef]>,
         heap: &mut Heap,
         args: u32,
     ) -> EvalResult<TableRef> {
@@ -542,7 +542,7 @@ impl Stack {
         };
         self.frames.push(Frame {
             func,
-            fallback_scopes: fallback_scopes.into(),
+            fallback_scopes,
             vals,
             ip: BcIdx(0),
             scope_idx: self.scopes.len(),
@@ -681,7 +681,7 @@ impl Stack {
     }
 
     /// Captures the current scopes and returns their references.
-    fn capture_scopes(&mut self) -> EvalResult<Box<[TableRef]>> {
+    fn capture_scopes(&mut self) -> EvalResult<Rc<[TableRef]>> {
         let frame = self.frames.last_mut().expect("At least one call frame");
         Ok(self
             .scopes
@@ -841,9 +841,9 @@ impl<'src> Process<'src> {
     fn eval_step(&mut self, instr: &Bc) -> EvalResult<()> {
         match instr {
             Bc::Imm(val) => match val {
-                &Val::Func { func, scopes: None } => {
-                    let scopes = Some(self.stack.capture_scopes()?);
-                    self.stack.push_val(Val::Func { func, scopes });
+                &Val::Func(func) => {
+                    let scopes = self.stack.capture_scopes()?;
+                    self.stack.push_val(Val::Closure { func, scopes });
                 }
                 val => self.stack.push_val(val.clone()),
             },
@@ -879,13 +879,8 @@ impl<'src> Process<'src> {
             }
             Bc::Call { name, args } => {
                 let func = self.stack.get(&self.heap, name)?.clone();
-                if let Val::Func { func, scopes } = func {
-                    let Some(scopes) = scopes else {
-                        return Err(EvalError::InternalError("Function should have scopes"));
-                    };
-                    let scope = self
-                        .stack
-                        .push_frame(func, &scopes, &mut self.heap, *args)?;
+                if let Val::Closure { func, scopes } = func {
+                    let scope = self.stack.push_frame(func, scopes, &mut self.heap, *args)?;
                     let func = &self.text[func];
                     let mut vals = self.stack.pop_vals(*args).into_iter();
                     for arg in func.iter_args() {

@@ -189,7 +189,7 @@ impl<'src> Parser<'src> {
                 ParseState::Func { func, name, loc } => {
                     self.func_stack.pop();
                     self.curr_func_mut()
-                        .append_instr(Bc::Imm(Val::Func { func, scopes: None }), loc);
+                        .append_instr(Bc::Imm(Val::Func(func)), loc);
                     if let Some(name) = name {
                         self.curr_func_mut().append_instr(Bc::Store(name), loc);
                     }

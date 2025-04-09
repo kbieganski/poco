@@ -310,12 +310,14 @@ pub enum Val {
     String(Rc<str>),
     /// Map from bool, int, string, and table keys to any values.
     Table(TableRef),
+    /// Function reference with no scopes.
+    Func(FuncRef),
     /// Function reference with captured scopes.
-    Func {
+    Closure {
         /// Function reference.
         func: FuncRef,
         /// Scopes captured by the function.
-        scopes: Option<Box<[TableRef]>>,
+        scopes: Rc<[TableRef]>,
     },
     /// FFI function reference.
     ForeignFunc(ForeignFunc),
@@ -342,13 +344,10 @@ impl fmt::Display for Val {
             Val::Float(float) => write!(f, "{float}"),
             Val::String(string) => write!(f, "{string}"),
             Val::Table(refe) => write!(f, "{refe}"),
-            Val::Func {
+            Val::Func(FuncRef(refe)) => write!(f, "<func {refe:#x}>"),
+            Val::Closure {
                 func: FuncRef(refe),
-                scopes: None,
-            } => write!(f, "<func {refe:#x}>"),
-            Val::Func {
-                func: FuncRef(refe),
-                scopes: Some(scopes),
+                scopes,
             } => {
                 write!(f, "<func {refe:#x} [")?;
                 for scope in scopes.iter() {
