@@ -31,7 +31,8 @@ pub(super) fn eval_dbg(text: Text) -> Result<(Val, Heap)> {
         let instr = proc.stack.get_instr(&proc.text);
         let loc = proc.stack.get_instr_loc(&proc.text);
         eprint!("-> {instr} @ {loc} | stack: [");
-        for val in proc.stack.curr_frame().vals.iter() {
+        let frame_eval_stack = &proc.stack.vals[proc.stack.curr_frame().vals_idx..];
+        for val in frame_eval_stack.iter() {
             eprint!(" {val}");
         }
         eprintln!(" ]");
@@ -471,8 +472,8 @@ struct Frame {
     fallback_scopes: Rc<[TableRef]>,
     /// Current instruction pointer.
     ip: BcIdx,
-    /// Evaluation stack for expression evaluation.
-    vals: Vec<Val>,
+    /// The index of the frame in the global value stack.
+    vals_idx: usize,
     /// The index of the current scope in the scope stack.
     scope_idx: usize,
 }
@@ -501,6 +502,8 @@ struct Stack {
     frames: Vec<Frame>,
     /// Scopes that belong to the frames in the call stack.
     scopes: Vec<Scope>,
+    /// Value stack for expression evaluation.
+    vals: Vec<Val>,
 }
 
 impl Stack {
@@ -510,11 +513,12 @@ impl Stack {
             frames: vec![Frame {
                 func,
                 fallback_scopes: Default::default(),
-                vals: Default::default(),
+                vals_idx: Default::default(),
                 ip: BcIdx(0),
                 scope_idx: 0,
             }],
             scopes: vec![Scope::new(heap)],
+            vals: Default::default(),
         }
     }
 
@@ -534,38 +538,31 @@ impl Stack {
         heap: &mut Heap,
         args: u32,
     ) -> EvalResult<TableRef> {
-        let vals = if args > 0 {
-            let frame = self.curr_frame_mut();
-            frame.vals.split_off(frame.vals.len() - args as usize)
-        } else {
-            Default::default()
-        };
         self.frames.push(Frame {
             func,
             fallback_scopes,
-            vals,
+            vals_idx: self.vals.len() - args as usize,
             ip: BcIdx(0),
             scope_idx: self.scopes.len(),
         });
         Ok(self.push_scope(heap))
     }
 
-    /// Pushes a value onto the current frame's value stack.
+    /// Pushes a value onto the value stack.
     fn push_val(&mut self, val: Val) {
-        self.curr_frame_mut().vals.push(val);
+        self.vals.push(val);
     }
 
-    /// Pops a value from the current frame's value stack.
+    /// Pops a value from the value stack.
     fn pop_val(&mut self) -> EvalResult<Val> {
-        self.curr_frame_mut()
-            .vals
+        self.vals
             .pop()
             .ok_or(EvalError::InternalError("Unexpected empty value stack"))
     }
 
-    /// Returns a reference to the top value on the current frame's value stack.
+    /// Returns a reference to the top value on the value stack.
     fn top_val(&mut self) -> Option<&Val> {
-        self.frames.last_mut().and_then(|frame| frame.vals.last())
+        self.vals.last()
     }
 
     /// Gets a value from the current frame's scope or fallback scopes.
@@ -625,7 +622,6 @@ impl Stack {
         while self.scopes.len() > frame.scope_idx {
             self.pop_scope(heap)?;
         }
-        self.curr_frame_mut().vals.extend(frame.vals);
         Ok(())
     }
 
@@ -696,20 +692,19 @@ impl Stack {
             .collect())
     }
 
-    /// Returns true if the current frame's evaluation stack is empty.
+    /// Returns true if the current frame's value stack is empty.
     fn no_frame_vals(&self) -> bool {
-        self.curr_frame().vals.is_empty()
+        self.curr_frame().vals_idx >= self.vals.len()
     }
 
-    /// Clears the values in the current frame.
+    /// Clears the current frame's values from the value stack.
     fn clear_vals(&mut self) {
-        self.curr_frame_mut().vals.clear();
+        self.vals.drain(self.curr_frame().vals_idx..);
     }
 
-    /// Pops multiple values from the current frame's value stack.
+    /// Pops multiple values from the value stack.
     fn pop_vals(&mut self, args: u32) -> Vec<Val> {
-        let frame = self.curr_frame_mut();
-        frame.vals.split_off(frame.vals.len() - args as usize)
+        self.vals.split_off(self.vals.len() - args as usize)
     }
 
     /// Returns true if the stack is at the bottom frame.
@@ -724,7 +719,7 @@ struct Process<'src> {
     text: Text<'src>,
     /// Container for tables.
     heap: Heap,
-    /// Call stack. Handles call frames, scopes, and expression evaluation stacks.
+    /// Call stack. Handles call frames, scopes, and value stacks.
     stack: Stack,
 }
 
@@ -966,7 +961,7 @@ impl<'src> Process<'src> {
     /// Retrieves the module's return value if it explicitly returned one
     fn return_value(&mut self) -> (Val, Heap) {
         (
-            self.stack.curr_frame_mut().vals.pop().unwrap_or(Val::None),
+            self.stack.vals.pop().unwrap_or(Val::None),
             take(&mut self.heap),
         )
     }
