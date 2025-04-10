@@ -16,6 +16,7 @@ enum ParseState<'src> {
         name: Option<&'src str>,
         loc: SourceLoc<'src>,
     },
+    Body,
     If {
         loc: SourceLoc<'src>,
     },
@@ -177,10 +178,26 @@ impl<'src> Parser<'src> {
                                 loc,
                             });
                             self.push_func(func);
-                            self.parse_scope()?;
+                            expect_token!(self, Token::LBrace);
+                            let curr_tok = self.expect_curr_tok()?;
+                            if let Token::RBrace = curr_tok.token {
+                                self.advance()?;
+                            } else {
+                                self.push_state(ParseState::Body);
+                                self.parse_stmt()?;
+                            }
                         } else {
                             self.parse_stmt()?;
                         }
+                    }
+                }
+                ParseState::Body => {
+                    let curr_tok = self.expect_curr_tok()?;
+                    if let Token::RBrace = curr_tok.token {
+                        self.advance()?;
+                    } else {
+                        self.push_state(ParseState::Body);
+                        self.parse_stmt()?;
                     }
                 }
                 ParseState::Scope => {
@@ -937,16 +954,19 @@ mod tests {
         };
     }
     parser_test!(empty, "");
-    parser_test!(empty_func, "fn f() {}", [("f", &[], &[Push, Pop])]);
+    parser_test!(empty_func, "fn f() {}", [("f", &[], &[])]);
     parser_test!(
         call,
         "fn f() {} fn g() { f() }",
         [
-            ("f", &[], &[Push, Pop]),
+            ("f", &[], &[]),
             (
                 "g",
                 &[],
-                &[Push, Call { name: "f", args: 0 }, Discard, Pop,]
+                &[Call {
+                    name: "f".into(),
+                    args: 0
+                },]
             )
         ]
     );
@@ -954,17 +974,17 @@ mod tests {
         call_args,
         "fn f(a, b) {} fn g() { f(1, 2) }",
         [
-            ("f", &["a", "b"], &[Push, Pop]),
+            ("f", &["a", "b"], &[]),
             (
                 "g",
                 &[],
                 &[
-                    Push,
                     Imm(Val::Int(1)),
                     Imm(Val::Int(2)),
-                    Call { name: "f", args: 2 },
-                    Discard,
-                    Pop,
+                    Call {
+                        name: "f".into(),
+                        args: 2
+                    },
                 ]
             )
         ]
@@ -972,12 +992,12 @@ mod tests {
     parser_test!(
         return_stmt,
         "fn f() { return 1 }",
-        [("f", &[], &[Push, Imm(Val::Int(1)), Ret, Pop])]
+        [("f", &[], &[Imm(Val::Int(1)), Ret,])]
     );
     parser_test!(
         assign,
         "fn f() { a = 1 }",
-        [("f", &[], &[Push, Imm(Val::Int(1)), Store("a"), Pop])]
+        [("f", &[], &[Imm(Val::Int(1)), Store("a".into()),])]
     );
     parser_test!(
         assign_field,
@@ -986,12 +1006,10 @@ mod tests {
             "f",
             &["a"],
             &[
-                Push,
-                Ref("a"),
+                Ref("a".into()),
                 Imm(Val::from_str("b")),
                 Imm(Val::Int(1)),
                 Set,
-                Pop,
             ]
         )]
     );
@@ -1001,7 +1019,7 @@ mod tests {
         [(
             "f",
             &["a"],
-            &[Push, Ref("a"), Imm(Val::Int(1)), Imm(Val::Int(2)), Set, Pop,]
+            &[Ref("a".into()), Imm(Val::Int(1)), Imm(Val::Int(2)), Set,]
         )]
     );
     parser_test!(
@@ -1011,7 +1029,6 @@ mod tests {
             "f",
             &[],
             &[
-                Push,
                 Imm(Val::Int(2)),
                 Imm(Val::Int(1)),
                 BinOp(Div),
@@ -1024,14 +1041,13 @@ mod tests {
                 BinOp(Add),
                 BinOp(Or),
                 Ret,
-                Pop,
             ]
         )]
     );
     parser_test!(
         negate,
         "fn f() { return -1 }",
-        [("f", &[], &[Push, Imm(Val::Int(1)), UnOp(Neg), Ret, Pop,])]
+        [("f", &[], &[Imm(Val::Int(1)), UnOp(Neg), Ret,])]
     );
     parser_test!(
         if_then,
@@ -1039,15 +1055,7 @@ mod tests {
         [(
             "f",
             &[],
-            &[
-                Push,
-                Imm(Val::Bool(false)),
-                UnOp(Not),
-                Branch(2),
-                Push,
-                Pop,
-                Pop,
-            ]
+            &[Imm(Val::Bool(false)), UnOp(Not), Branch(2), Push, Pop,]
         )]
     );
     parser_test!(
@@ -1057,7 +1065,6 @@ mod tests {
             "f",
             &[],
             &[
-                Push,
                 Imm(Val::Bool(true)),
                 UnOp(Not),
                 Branch(3),
@@ -1065,7 +1072,6 @@ mod tests {
                 Pop,
                 Jump(2),
                 Push,
-                Pop,
                 Pop,
             ]
         )]
@@ -1077,14 +1083,12 @@ mod tests {
             "f",
             &[],
             &[
-                Push,
                 Imm(Val::Bool(true)),
                 UnOp(Not),
                 Branch(3),
                 Push,
                 Pop,
                 Jump(-6),
-                Pop,
             ]
         )]
     );
@@ -1096,21 +1100,19 @@ mod tests {
             &[],
             &[
                 Push,
-                Push,
                 Imm(Val::Int(1)),
-                Store("i"),
+                Store("i".into()),
                 Imm(Val::Int(2)),
-                Ref("i"),
+                Ref("i".into()),
                 BinOp(Leq),
                 Branch(7),
                 Push,
                 Pop,
-                Ref("i"),
+                Ref("i".into()),
                 Imm(Val::Int(1)),
                 BinOp(Add),
-                Store("i"),
+                Store("i".into()),
                 Jump(-11),
-                Pop,
                 Pop,
             ]
         )]
@@ -1122,7 +1124,6 @@ mod tests {
             "f",
             &[],
             &[
-                Push,
                 Table,
                 Imm(Val::from_str("a")),
                 Imm(Val::Int(1)),
@@ -1130,8 +1131,7 @@ mod tests {
                 Imm(Val::from_str("b")),
                 Imm(Val::Int(2)),
                 Set,
-                Store("x"),
-                Pop
+                Store("x".into()),
             ]
         )]
     );
@@ -1142,7 +1142,6 @@ mod tests {
             "f",
             &[],
             &[
-                Push,
                 Table,
                 Imm(Val::Int(0)),
                 Imm(Val::Int(1)),
@@ -1150,8 +1149,7 @@ mod tests {
                 Imm(Val::Int(1)),
                 Imm(Val::Int(2)),
                 Set,
-                Store("x"),
-                Pop
+                Store("x".into()),
             ]
         )]
     );
