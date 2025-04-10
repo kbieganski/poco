@@ -238,7 +238,7 @@ impl Val {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Hash, PartialOrd, Ord)]
 enum Key {
     Bool(bool),
     Int(i64),
@@ -299,11 +299,14 @@ impl From<Key> for Val {
 /// Otherwise, it is stored as a hashmap and can also be indexed by bools, strings, and other tables.
 #[derive(Debug, Clone)]
 pub enum Table {
-    /// Hashmap variant for contiguous integer keys not starting at 0, non-contiguous integer keys or non-integer keys.
-    #[allow(private_interfaces)]
-    Map(HashMap<Key, Val>),
-    /// Array variant for contiguous integer keys starting at 0.
+    /// Array variant for tables with contiguous integer keys starting at 0.
     Array(Vec<Val>),
+    /// Flat map (sorted array) variant for small tables with keys other than contiguous integers starting at 0.
+    #[allow(private_interfaces)]
+    FlatMap(Vec<(Key, Val)>),
+    /// Hashmap variant for big tables with keys other than contiguous integers starting at 0.
+    #[allow(private_interfaces)]
+    HashMap(HashMap<Key, Val>),
 }
 
 impl Default for Table {
@@ -313,6 +316,9 @@ impl Default for Table {
 }
 
 impl Table {
+    /// Maximum number of elements in a flat map representation.
+    const FLAT_MAP_LIMIT: usize = 32;
+
     /// Sets a value in the table at the specified key.
     /// If an entry under the given key exists, it is replaced.
     fn set(&mut self, key: Key, value: Val) {
@@ -329,15 +335,27 @@ impl Table {
                     }
                 }
 
-                let mut map: HashMap<_, _> = take(array)
+                let elems = take(array)
                     .into_iter()
                     .enumerate()
-                    .map(|(i, v)| (Key::Int(i as i64), v))
-                    .collect();
-                map.insert(key, value);
-                *self = Table::Map(map);
+                    .map(|(i, v)| (Key::Int(i as i64), v));
+                if elems.len() >= Self::FLAT_MAP_LIMIT {
+                    *self = Table::HashMap(elems.collect());
+                } else {
+                    *self = Table::FlatMap(elems.collect());
+                }
+                self.set(key, value);
             }
-            Table::Map(map) => {
+            Table::FlatMap(map) => {
+                if let Err(idx) = map.binary_search_by_key(&&key, |(k, _)| k) {
+                    map.insert(idx, (key, value))
+                }
+                if map.len() > Self::FLAT_MAP_LIMIT {
+                    let elems = take(map).into_iter().map(|(k, v)| (k, v)).collect();
+                    *self = Table::HashMap(elems);
+                }
+            }
+            Table::HashMap(map) => {
                 map.insert(key, value);
             }
         }
@@ -356,7 +374,14 @@ impl Table {
                 }
                 None
             }
-            Table::Map(map) => map.get(key),
+            Table::FlatMap(map) => match map.binary_search_by_key(&key, |(k, _)| k) {
+                Ok(idx) => {
+                    let (_, val) = &map[idx];
+                    Some(val)
+                }
+                Err(_) => None,
+            },
+            Table::HashMap(map) => map.get(key),
         }
     }
 
@@ -373,7 +398,11 @@ impl Table {
                 }
                 None
             }
-            Table::Map(map) => map.get_mut(key),
+            Table::FlatMap(map) => match map.binary_search_by_key(&key, |(k, _)| k) {
+                Ok(idx) => Some(&mut map[idx].1),
+                Err(_) => None,
+            },
+            Table::HashMap(map) => map.get_mut(key),
         }
     }
 
@@ -381,7 +410,8 @@ impl Table {
     pub fn len(&self) -> usize {
         match self {
             Table::Array(array) => array.len(),
-            Table::Map(map) => map.len(),
+            Table::FlatMap(map) => map.len(),
+            Table::HashMap(map) => map.len(),
         }
     }
 
@@ -394,7 +424,8 @@ impl Table {
     pub fn iter(&self) -> TableIter {
         match self {
             Table::Array(array) => TableIter::Array(array.iter().enumerate()),
-            Table::Map(map) => TableIter::Map(map.iter()),
+            Table::FlatMap(map) => TableIter::FlatMap(map.iter()),
+            Table::HashMap(map) => TableIter::HashMap(map.iter()),
         }
     }
 }
@@ -403,9 +434,12 @@ impl Table {
 pub enum TableIter<'a> {
     /// Iterates over the array variant of `Table`.
     Array(Enumerate<slice::Iter<'a, Val>>),
-    /// Iterates over the map variant of `Table`.
+    /// Iterates over the flat map variant of `Table`.
     #[allow(private_interfaces)]
-    Map(hash_map::Iter<'a, Key, Val>),
+    FlatMap(slice::Iter<'a, (Key, Val)>),
+    /// Iterates over the hashmap variant of `Table`.
+    #[allow(private_interfaces)]
+    HashMap(hash_map::Iter<'a, Key, Val>),
 }
 
 impl<'a> Iterator for TableIter<'a> {
@@ -414,7 +448,8 @@ impl<'a> Iterator for TableIter<'a> {
     fn next(&mut self) -> Option<(Val, &'a Val)> {
         match self {
             TableIter::Array(iter) => iter.next().map(|(i, v)| (Val::Int(i as i64), v)),
-            TableIter::Map(iter) => iter.next().map(|(k, v)| (k.into(), v)),
+            TableIter::FlatMap(iter) => iter.next().map(|(k, v)| (k.into(), v)),
+            TableIter::HashMap(iter) => iter.next().map(|(k, v)| (k.into(), v)),
         }
     }
 }

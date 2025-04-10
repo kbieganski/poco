@@ -361,7 +361,7 @@ impl fmt::Display for Val {
 }
 
 /// Reference to a table in `Heap`.
-#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Hash)]
 pub struct TableRef(u32);
 
 impl TableRef {
