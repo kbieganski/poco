@@ -351,7 +351,7 @@ impl Table {
                     map.insert(idx, (key, value))
                 }
                 if map.len() > Self::FLAT_MAP_LIMIT {
-                    let elems = take(map).into_iter().map(|(k, v)| (k, v)).collect();
+                    let elems = take(map).into_iter().collect();
                     *self = Table::HashMap(elems);
                 }
             }
