@@ -931,7 +931,7 @@ impl<'src> Process<'src> {
                 self.stack.pop_scope(&mut self.heap)?;
             }
             Bc::Branch(offset) => {
-                if let Val::Bool(true) = self.stack.pop_val()? {
+                if let Val::Bool(false) = self.stack.pop_val()? {
                     self.stack.move_ip_by(*offset);
                 }
             }

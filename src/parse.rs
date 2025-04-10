@@ -212,7 +212,6 @@ impl<'src> Parser<'src> {
                     }
                 }
                 ParseState::If { loc } => {
-                    self.curr_func_mut().append_instr(Bc::UnOp(UnOp::Not), loc);
                     let idx = self.curr_func().next_instr_idx();
                     self.curr_func_mut().append_instr(Bc::Branch(0), loc);
                     self.push_state(ParseState::Then { idx });
@@ -242,7 +241,6 @@ impl<'src> Parser<'src> {
                     idx: start_idx,
                     loc,
                 } => {
-                    self.curr_func_mut().append_instr(Bc::UnOp(UnOp::Not), loc);
                     let idx = self.curr_func().next_instr_idx();
                     self.curr_func_mut().append_instr(Bc::Branch(0), loc);
                     self.push_state(ParseState::Loop {
@@ -272,8 +270,7 @@ impl<'src> Parser<'src> {
                 } => {
                     self.curr_func_mut()
                         .append_instr(Bc::Ref(counter_name), loc);
-                    self.curr_func_mut()
-                        .append_instr(Bc::BinOp(BinOp::Leq), loc);
+                    self.curr_func_mut().append_instr(Bc::BinOp(BinOp::Gt), loc);
                     let idx = self.curr_func().next_instr_idx();
                     self.curr_func_mut().append_instr(Bc::Branch(0), loc);
                     self.push_state(ParseState::Loop {
@@ -1052,11 +1049,7 @@ mod tests {
     parser_test!(
         if_then,
         "fn f() { if false {} }",
-        [(
-            "f",
-            &[],
-            &[Imm(Val::Bool(false)), UnOp(Not), Branch(2), Push, Pop,]
-        )]
+        [("f", &[], &[Imm(Val::Bool(false)), Branch(2), Push, Pop,])]
     );
     parser_test!(
         if_else,
@@ -1066,7 +1059,6 @@ mod tests {
             &[],
             &[
                 Imm(Val::Bool(true)),
-                UnOp(Not),
                 Branch(3),
                 Push,
                 Pop,
@@ -1082,14 +1074,7 @@ mod tests {
         [(
             "f",
             &[],
-            &[
-                Imm(Val::Bool(true)),
-                UnOp(Not),
-                Branch(3),
-                Push,
-                Pop,
-                Jump(-6),
-            ]
+            &[Imm(Val::Bool(true)), Branch(3), Push, Pop, Jump(-5),]
         )]
     );
     parser_test!(
@@ -1104,7 +1089,7 @@ mod tests {
                 Store("i".into()),
                 Imm(Val::Int(2)),
                 Ref("i".into()),
-                BinOp(Leq),
+                BinOp(Gt),
                 Branch(7),
                 Push,
                 Pop,
