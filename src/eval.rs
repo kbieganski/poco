@@ -10,7 +10,7 @@ use std::{
     collections::{hash_map, HashMap},
     fmt,
     iter::Enumerate,
-    mem::take,
+    mem::{replace, take},
     rc::Rc,
     slice,
 };
@@ -721,6 +721,8 @@ struct Process<'src> {
     heap: Heap,
     /// Call stack. Handles call frames, scopes, and value stacks.
     stack: Stack,
+    /// Return value of the entire process.
+    result: Val,
 }
 
 impl<'src> Process<'src> {
@@ -816,7 +818,12 @@ impl<'src> Process<'src> {
                 Ok(Val::None)
             }),
         );
-        Process { text, heap, stack }
+        Process {
+            text,
+            heap,
+            stack,
+            result: Val::None,
+        }
     }
 
     /// Executes a single step of the process.
@@ -828,7 +835,6 @@ impl<'src> Process<'src> {
         if let Err(err) = self.eval_step(&instr) {
             return Err(err.with_loc(self.stack.get_instr_loc(&self.text)));
         }
-        self.stack.move_ip_by(1);
         Ok(())
     }
 
@@ -887,6 +893,7 @@ impl<'src> Process<'src> {
                         };
                         scope.set(Key::from_str(arg), val);
                     }
+                    return Ok(());
                 } else if let Val::ForeignFunc(func) = func {
                     let vals = self.stack.pop_vals(*args);
                     self.stack.push_val(func(&vals, &mut self.heap)?);
@@ -934,22 +941,20 @@ impl<'src> Process<'src> {
             Bc::Discard => self.stack.clear_vals(),
             Bc::Ret => {
                 self.stack.move_ip_end(&self.text);
+                if self.stack.at_bottom_frame() {
+                    self.result = self.stack.pop_val()?;
+                    self.stack.clear_vals();
+                }
             }
         }
 
-        if self.stack.ip_at_end(&self.text) {
+        if !self.stack.at_bottom_frame() && self.stack.ip_at_end(&self.text) {
+            self.stack.pop_frame(&mut self.heap)?;
             if self.stack.no_frame_vals() {
                 self.stack.push_val(Val::None);
             }
-            if self.stack.at_bottom_frame() {
-                // If we're not on a return, clear the value stack so `return_value` returns nothing
-                if !matches!(instr, Bc::Ret) {
-                    self.stack.clear_vals();
-                }
-            } else {
-                self.stack.pop_frame(&mut self.heap)?;
-            }
         }
+        self.stack.move_ip_by(1);
         Ok(())
     }
 
@@ -960,10 +965,7 @@ impl<'src> Process<'src> {
 
     /// Retrieves the module's return value if it explicitly returned one
     fn return_value(&mut self) -> (Val, Heap) {
-        (
-            self.stack.vals.pop().unwrap_or(Val::None),
-            take(&mut self.heap),
-        )
+        (replace(&mut self.result, Val::None), take(&mut self.heap))
     }
 }
 
