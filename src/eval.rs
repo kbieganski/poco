@@ -663,10 +663,10 @@ impl Stack {
     }
 
     /// Gets the instruction at the instruction pointer.
-    fn get_instr<'src>(&self, text: &Text<'src>) -> Bc<'src> {
+    fn get_instr<'a, 'src>(&self, text: &'a Text<'src>) -> &'a Bc<'src> {
         let frame = self.curr_frame();
         let func = &text[frame.func];
-        func.instr_at(frame.ip).clone()
+        func.instr_at(frame.ip)
     }
 
     /// Gets the current instruction's source location.
@@ -828,18 +828,17 @@ impl<'src> Process<'src> {
 
     /// Executes a single step of the process.
     fn step(&mut self) -> Result<'src, ()> {
-        if self.is_done() {
-            return Ok(());
-        }
-        let instr = self.stack.get_instr(&self.text);
-        if let Err(err) = self.eval_step(&instr) {
-            return Err(err.with_loc(self.stack.get_instr_loc(&self.text)));
+        if !self.is_done() {
+            if let Err(err) = self.eval_step() {
+                return Err(err.with_loc(self.stack.get_instr_loc(&self.text)));
+            }
         }
         Ok(())
     }
 
-    /// Executes a single instruction.
-    fn eval_step(&mut self, instr: &Bc) -> EvalResult<()> {
+    /// Evaluates a single instruction.
+    fn eval_step(&mut self) -> EvalResult<()> {
+        let instr = self.stack.get_instr(&self.text);
         match instr {
             Bc::Imm(val) => match val {
                 &Val::Func(func) => {
