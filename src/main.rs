@@ -53,7 +53,6 @@ fn main() {
                         println!("{val}");
                     }
                     Err(Error { loc, detail }) => {
-                        let source = loc.source;
                         let max_line = source.contents.lines().count();
                         let max_lineno_width = max_line.ilog10() as usize + 1;
                         source

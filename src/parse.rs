@@ -14,11 +14,11 @@ enum ParseState<'src> {
     Func {
         func: FuncRef,
         name: Option<&'src str>,
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     Body,
     If {
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     Then {
         idx: BcIdx,
@@ -28,34 +28,34 @@ enum ParseState<'src> {
     },
     While {
         idx: BcIdx,
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     ForInit {
         counter_name: &'src str,
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     ForCond {
         idx: BcIdx,
         counter_name: &'src str,
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     ForInc {
         counter_name: &'src str,
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     Loop {
         branch_idx: BcIdx,
         start_idx: BcIdx,
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
         pop_scope: bool,
     },
     Assign {
         lhs: &'src str,
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     IndexAssign,
     IndexSet {
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     Expr,
     Logic,
@@ -64,28 +64,28 @@ enum ParseState<'src> {
     Term,
     Primary,
     IndexGet {
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     Call {
         name: &'src str,
         args: u32,
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     Table {
         count: i64,
-        field: Option<SourceLoc<'src>>,
+        field: Option<SourceLoc>,
     },
     Paren,
     UnOp {
         op: UnOp,
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     BinOp {
         op: BinOp,
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
     Return {
-        loc: SourceLoc<'src>,
+        loc: SourceLoc,
     },
 }
 
@@ -94,7 +94,7 @@ pub(super) struct Parser<'src> {
     /// Lexer to read tokens from.
     lexer: Peekable<Lexer<'src>>,
     /// Location of the last token, used for unexpected EOF.
-    last_loc: SourceLoc<'src>,
+    last_loc: SourceLoc,
     /// Currently processed token.
     curr_tok: Option<TokenLoc<'src>>,
     /// Parser state stack.
@@ -126,7 +126,6 @@ impl<'src> Parser<'src> {
     /// Creates a new parser for the given lexer.
     pub(super) fn new(lexer: Lexer<'src>) -> Self {
         let last_loc = SourceLoc {
-            source: lexer.source,
             offset: 0,
             line: 0,
             col: 0,
@@ -144,7 +143,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parses the tokens into `Text` (a set of `Func`s).
-    pub(super) fn parse(&mut self) -> Result<'src, Text<'src>> {
+    pub(super) fn parse(&mut self) -> Result<Text<'src>> {
         self.advance()?;
         self.push_state(ParseState::Module);
         while let Some(state) = self.state_stack.pop() {
@@ -645,7 +644,7 @@ impl<'src> Parser<'src> {
 
     /// Starts parsing a single statement.
     /// It usually does not fully parse the statement, but only sets up parser states for `parse()`.
-    fn parse_stmt(&mut self) -> Result<'src, ()> {
+    fn parse_stmt(&mut self) -> Result<()> {
         self.discard_after_call();
         let curr_tok = self.expect_curr_tok()?;
         let loc = curr_tok.loc;
@@ -754,7 +753,7 @@ impl<'src> Parser<'src> {
 
     /// Sets up parsing a new scope (between `{` and `}`).
     /// It usually does not fully parse the scope, but only sets up parser states for `parse()`.
-    fn parse_scope<'a>(&'a mut self) -> Result<'src, ()> {
+    fn parse_scope(&mut self) -> Result<()> {
         expect_token!(self, Token::LBrace);
         let loc = self.expect_curr_tok()?.loc;
         self.curr_func_mut().append_instr(Bc::Push, loc);
@@ -762,7 +761,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parses the end of a scope, or sets up states for parsing another statement and the end of scope after that.
-    fn parse_end_scope(&mut self) -> Result<'src, ()> {
+    fn parse_end_scope(&mut self) -> Result<()> {
         let curr_tok = self.expect_curr_tok()?;
         if let Token::RBrace = curr_tok.token {
             self.advance()?;
@@ -788,7 +787,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parses function arguments.
-    fn parse_func_args<'a>(&'a mut self) -> Result<'src, Vec<&'src str>> {
+    fn parse_func_args<'a>(&'a mut self) -> Result<Vec<&'src str>> {
         expect_token!(self, Token::LParen);
         let curr_tok = self.expect_curr_tok()?;
         let mut args = Vec::new();
@@ -842,7 +841,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Advances to the next token.
-    fn advance(&mut self) -> Result<'src, ()> {
+    fn advance(&mut self) -> Result<()> {
         if let Some(TokenLoc { loc, .. }) = self.curr_tok {
             self.last_loc = loc
         }
@@ -862,7 +861,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Peeks at the next token without advancing.
-    fn peek(&mut self) -> Result<'src, Option<&TokenLoc>> {
+    fn peek(&mut self) -> Result<Option<&TokenLoc>> {
         match self.lexer.peek() {
             Some(Ok(tok)) => Ok(Some(tok)),
             Some(Err(err)) => Err(err.clone()),
@@ -871,7 +870,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Expects the current token to be present and returns it.
-    fn expect_curr_tok<'a>(&'a mut self) -> Result<'src, TokenLoc<'src>> {
+    fn expect_curr_tok<'a>(&'a mut self) -> Result<TokenLoc<'src>> {
         match self.curr_tok {
             Some(tok) => Ok(tok),
             None => Err(Error {
@@ -915,7 +914,6 @@ mod tests {
                     err,
                     Error {
                         loc: SourceLoc {
-                            source,
                             offset: $offset,
                             line: $line,
                             col: $col,

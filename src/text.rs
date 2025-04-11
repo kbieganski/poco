@@ -56,7 +56,7 @@ pub(super) struct Func<'src> {
     /// Bytecode instructions of the function.
     instrs: Vec<Bc<'src>>,
     /// Source locations of the instructions.
-    locs: Vec<SourceLoc<'src>>,
+    locs: Vec<SourceLoc>,
 }
 
 /// Index into the bytecode within a function.
@@ -70,7 +70,7 @@ impl<'src> Func<'src> {
     }
 
     /// Appends an instruction to the function.
-    pub(super) fn append_instr(&mut self, instr: Bc<'src>, loc: SourceLoc<'src>) {
+    pub(super) fn append_instr(&mut self, instr: Bc<'src>, loc: SourceLoc) {
         self.instrs.push(instr);
         self.locs.push(loc);
     }
@@ -91,12 +91,12 @@ impl<'src> Func<'src> {
     }
 
     /// Returns the source location of the instruction at the specified index.
-    pub(super) fn instr_loc_at(&self, BcIdx(idx): BcIdx) -> SourceLoc<'src> {
+    pub(super) fn instr_loc_at(&self, BcIdx(idx): BcIdx) -> SourceLoc {
         self.locs[idx as usize]
     }
 
     /// Returns the source location of the last instruction, if any.
-    pub(super) fn instr_loc_last(&self) -> Option<SourceLoc<'src>> {
+    pub(super) fn instr_loc_last(&self) -> Option<SourceLoc> {
         self.locs.last().copied()
     }
 

@@ -25,14 +25,14 @@ pub fn emit_bc(source: &Source) -> Result<()> {
 
 /// Error with source location and detail information.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Error<'src> {
+pub struct Error {
     /// Location of the error in the source code.
-    pub loc: SourceLoc<'src>,
+    pub loc: SourceLoc,
     /// Details about the error.
-    pub detail: ErrorDetail<'src>,
+    pub detail: ErrorDetail,
 }
 
-impl fmt::Display for Error<'_> {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{err} at {loc}", err = self.detail, loc = self.loc)
     }
@@ -40,7 +40,7 @@ impl fmt::Display for Error<'_> {
 
 /// The details (e.g. message) of an error.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ErrorDetail<'src> {
+pub enum ErrorDetail {
     /// An invalid token was encountered during lexing.
     InvalidToken,
     /// End of file was encountered too early during parsing.
@@ -52,10 +52,10 @@ pub enum ErrorDetail<'src> {
     /// An undefined variable was referenced during evaluation.
     Undefined(String),
     /// An internal error occurred; indicates a bug.
-    InternalError(&'src str),
+    InternalError(&'static str),
 }
 
-impl fmt::Display for ErrorDetail<'_> {
+impl fmt::Display for ErrorDetail {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ErrorDetail::InvalidToken => write!(f, "Invalid token"),
@@ -69,7 +69,7 @@ impl fmt::Display for ErrorDetail<'_> {
 }
 
 /// Result with an error type of `Error`.
-pub type Result<'src, T> = std::result::Result<T, Error<'src>>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Unary operation.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -185,10 +185,8 @@ pub type LineNr = u32;
 pub type ColNr = u32;
 
 /// Location (offset, line, column) in source code.
-#[derive(Clone, Copy)]
-pub struct SourceLoc<'src> {
-    /// Source code.
-    pub source: &'src Source,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SourceLoc {
     /// Byte offset in the source.
     pub offset: Offset,
     /// Line number in the source.
@@ -197,37 +195,9 @@ pub struct SourceLoc<'src> {
     pub col: ColNr,
 }
 
-impl PartialEq for SourceLoc<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.source, other.source)
-            && self.offset == other.offset
-            && self.line == other.line
-            && self.col == other.col
-    }
-}
-
-impl fmt::Display for SourceLoc<'_> {
+impl fmt::Display for SourceLoc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{source}:{line}:{col}",
-            source = self.source.name,
-            line = self.line + 1,
-            col = self.col + 1,
-        )
-    }
-}
-
-impl fmt::Debug for SourceLoc<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "SourceLoc {{ source: Source {{ name: {name:?}, .. }}, offset: {offset:?}, line: {line:?}, col: {col:?} }}",
-            name = self.source.name,
-            offset = self.offset,
-            line = self.line,
-            col = self.col
-        )
+        write!(f, "{line}:{col}", line = self.line + 1, col = self.col + 1,)
     }
 }
 
@@ -237,7 +207,7 @@ struct TokenLoc<'src> {
     /// Token extracted from source code.
     token: Token<'src>,
     /// Location of the token in the source code.
-    loc: SourceLoc<'src>,
+    loc: SourceLoc,
 }
 
 /// A native function callable through FFI.

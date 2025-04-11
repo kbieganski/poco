@@ -705,7 +705,7 @@ impl Stack {
     }
 
     /// Gets the current instruction's source location.
-    fn get_instr_loc<'src>(&self, text: &Text<'src>) -> SourceLoc<'src> {
+    fn get_instr_loc(&self, text: &Text) -> SourceLoc {
         let frame = self.curr_frame();
         let func = &text[frame.func];
         func.instr_loc_at(frame.ip)
@@ -862,7 +862,7 @@ impl<'src> Process<'src> {
     }
 
     /// Executes a single step of the process.
-    fn step(&mut self) -> Result<'src, ()> {
+    fn step(&mut self) -> Result<()> {
         if !self.is_done() {
             if let Err(err) = self.eval_step() {
                 return Err(err.with_loc(self.stack.get_instr_loc(&self.text)));
@@ -1021,12 +1021,7 @@ mod tests {
                 assert_eq!(
                     err,
                     Error {
-                        loc: SourceLoc {
-                            source,
-                            offset: $offset,
-                            line: $line,
-                            col: $col,
-                        },
+                        loc: SourceLoc { offset: $offset, line: $line, col: $col, },
                         detail: $detail,
                     }
                 );

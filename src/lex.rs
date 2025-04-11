@@ -32,7 +32,7 @@ impl<'src> Lexer<'src> {
     }
 
     /// Returns the next token from the source code.
-    fn next_token(&mut self) -> Option<Result<'src, TokenLoc<'src>>> {
+    fn next_token(&mut self) -> Option<Result<TokenLoc<'src>>> {
         self.matching_substr(|chr| chr.is_whitespace());
         self.curr_char.map(|(start, chr)| {
             let loc = self.curr_loc();
@@ -128,12 +128,7 @@ impl<'src> Lexer<'src> {
                         *self = lexer;
                         return Ok(TokenLoc {
                             token,
-                            loc: SourceLoc {
-                                source: self.source,
-                                offset,
-                                line,
-                                col,
-                            },
+                            loc: SourceLoc { offset, line, col },
                         });
                     }
                 }
@@ -180,19 +175,14 @@ impl<'src> Lexer<'src> {
     }
 
     /// Returns the current location in the source code.
-    fn curr_loc(&mut self) -> SourceLoc<'src> {
+    fn curr_loc(&mut self) -> SourceLoc {
         let (offset, line, col) = self.loc;
-        SourceLoc {
-            source: self.source,
-            offset,
-            line,
-            col,
-        }
+        SourceLoc { offset, line, col }
     }
 }
 
 impl<'src> Iterator for Lexer<'src> {
-    type Item = Result<'src, TokenLoc<'src>>;
+    type Item = Result<TokenLoc<'src>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_token()
@@ -219,7 +209,6 @@ mod tests {
                             err,
                             Error {
                                 loc: SourceLoc {
-                                    source,
                                     offset: $offset,
                                     line: $line,
                                     col: $col,
@@ -246,12 +235,7 @@ mod tests {
                     .map(|&(token, offset, line, col)| -> Result<_> {
                         Ok(TokenLoc {
                             token,
-                            loc: SourceLoc {
-                                source,
-                                offset,
-                                line,
-                                col,
-                            },
+                            loc: SourceLoc { offset, line, col },
                         })
                     });
                 let mut act_opt = lexer.next();
