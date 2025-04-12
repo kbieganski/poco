@@ -55,7 +55,7 @@ pub enum EvalError {
     /// An operation was attempted on incompatible types.
     TypeError,
     /// An undefined variable was referenced during evaluation.
-    Undefined(String),
+    Undefined(Rc<str>),
     /// An internal error occurred; indicates a bug.
     InternalError(&'static str),
 }
@@ -614,7 +614,7 @@ impl Stack {
     }
 
     /// Gets a value from the current frame's scope or fallback scopes.
-    fn get<'a>(&'a self, heap: &'a Heap, name: &str) -> EvalResult<&'a Val> {
+    fn get<'a>(&'a self, heap: &'a Heap, name: &Rc<str>) -> EvalResult<&'a Val> {
         let frame = self.curr_frame();
         for scope in self.scopes[frame.scope_idx..]
             .iter()
@@ -622,17 +622,17 @@ impl Stack {
             .map(|scope| scope.table)
             .chain(frame.fallback_scopes.iter().copied())
         {
-            if let Some(val) = heap.get(scope).get(&Key::String(name.into())) {
+            if let Some(val) = heap.get(scope).get(&Key::String(name.clone())) {
                 return Ok(val);
             }
         }
-        Err(EvalError::Undefined(name.to_owned()))
+        Err(EvalError::Undefined(name.clone()))
     }
 
     /// Sets a value in the current frame's scope or fallback scopes.
-    fn set(&mut self, heap: &mut Heap, field: Val, new_val: Val) -> EvalResult<()> {
+    fn set(&mut self, heap: &mut Heap, name: &Rc<str>, new_val: Val) -> EvalResult<()> {
         let frame = self.curr_frame();
-        let key = field.try_into()?;
+        let key = Key::String(name.clone());
         // Find tightest scope with given var
         for scope in self.scopes[frame.scope_idx..]
             .iter()
@@ -711,7 +711,7 @@ impl Stack {
     }
 
     /// Gets the instruction at the instruction pointer.
-    fn get_instr<'a, 'src>(&self, text: &'a Text<'src>) -> &'a Bc<'src> {
+    fn get_instr<'a>(&self, text: &'a Text) -> &'a Bc {
         let frame = self.curr_frame();
         let func = &text[frame.func];
         func.instr_at(frame.ip)
@@ -762,9 +762,9 @@ impl Stack {
 }
 
 /// Bytecode executor. Ties together a `Text`, `Heap`, and `Stack`. Provides functions for bytecode evaluation.
-struct Process<'src> {
+struct Process {
     /// Bytecode to be executed.
-    text: Text<'src>,
+    text: Text,
     /// Container for tables.
     heap: Heap,
     /// Call stack. Handles call frames, scopes, and value stacks.
@@ -773,9 +773,9 @@ struct Process<'src> {
     result: Val,
 }
 
-impl<'src> Process<'src> {
+impl Process {
     /// Creates a new process for evaluating the given `Text`.
-    fn new(text: Text<'src>) -> Self {
+    fn new(text: Text) -> Self {
         let mut heap = Heap::default();
         let entry = FuncRef(0);
         let stack = Stack::new(entry, &mut heap);
@@ -938,7 +938,7 @@ impl<'src> Process<'src> {
                         } else {
                             Val::None
                         };
-                        scope.set(Key::from_str(arg), val);
+                        scope.set(Key::String(arg.clone()), val);
                     }
                     return Ok(());
                 } else if let Val::ForeignFunc(func) = func {
@@ -953,7 +953,7 @@ impl<'src> Process<'src> {
             }
             Bc::Store(lhs) => {
                 let rhs = self.stack.pop_val()?;
-                self.stack.set(&mut self.heap, Val::from_str(*lhs), rhs)?;
+                self.stack.set(&mut self.heap, lhs, rhs)?;
             }
             Bc::Set => {
                 let val = self.stack.pop_val()?;

@@ -4,7 +4,7 @@ use super::{
     lex::Lexer, text::Bc, text::BcIdx, text::Func, BinOp, Error, ErrorDetail, FuncRef, Result,
     SourceLoc, Token, TokenLoc, UnOp, Val,
 };
-use std::{iter::Peekable, mem::take};
+use std::{collections::HashSet, iter::Peekable, mem::take, rc::Rc};
 
 /// Internal state of the parser during parsing.
 #[derive(Debug, Clone)]
@@ -101,8 +101,10 @@ pub(super) struct Parser<'src> {
     state_stack: Vec<ParseState<'src>>,
     /// Function stack, used to keep track of the current function being parsed.
     func_stack: Vec<FuncRef>,
+    /// Pool of string constants.
+    str_pool: HashSet<Rc<str>>,
     /// Bytecode produced by the parser.
-    text: Text<'src>,
+    text: Text,
 }
 
 macro_rules! expect_token {
@@ -131,7 +133,10 @@ impl<'src> Parser<'src> {
             col: 0,
         };
         let mut text = Text::default();
-        text.add_func(format!("<{}>", &lexer.source.name), Default::default());
+        text.add_func(
+            format!("<{}>", &lexer.source.name).into(),
+            Default::default(),
+        );
         Self {
             lexer: lexer.peekable(),
             last_loc,
@@ -139,11 +144,12 @@ impl<'src> Parser<'src> {
             state_stack: Default::default(),
             func_stack: vec![FuncRef(0)],
             text,
+            str_pool: Default::default(),
         }
     }
 
     /// Parses the tokens into `Text` (a set of `Func`s).
-    pub(super) fn parse(&mut self) -> Result<Text<'src>> {
+    pub(super) fn parse(&mut self) -> Result<Text> {
         self.advance()?;
         self.push_state(ParseState::Module);
         while let Some(state) = self.state_stack.pop() {
@@ -169,8 +175,9 @@ impl<'src> Parser<'src> {
                                     });
                                 }
                             };
+                            let pooled_name = self.pooled_str(name);
                             let args = self.parse_func_args()?;
-                            let func = self.text.add_func(name.to_owned(), args);
+                            let func = self.text.add_func(pooled_name, args);
                             self.push_state(ParseState::Func {
                                 func,
                                 name: Some(name),
@@ -207,6 +214,7 @@ impl<'src> Parser<'src> {
                     self.curr_func_mut()
                         .append_instr(Bc::Imm(Val::Func(func)), loc);
                     if let Some(name) = name {
+                        let name = self.pooled_str(name);
                         self.curr_func_mut().append_instr(Bc::Store(name), loc);
                     }
                 }
@@ -252,8 +260,9 @@ impl<'src> Parser<'src> {
                 }
                 ParseState::ForInit { counter_name, loc } => {
                     expect_token!(self, Token::Range);
+                    let store_name = self.pooled_str(counter_name);
                     self.curr_func_mut()
-                        .append_instr(Bc::Store(counter_name), loc);
+                        .append_instr(Bc::Store(store_name), loc);
                     let start_idx = self.curr_func().next_instr_idx();
                     self.push_state(ParseState::ForCond {
                         idx: start_idx,
@@ -267,8 +276,8 @@ impl<'src> Parser<'src> {
                     counter_name,
                     loc,
                 } => {
-                    self.curr_func_mut()
-                        .append_instr(Bc::Ref(counter_name), loc);
+                    let ref_name = self.pooled_str(counter_name);
+                    self.curr_func_mut().append_instr(Bc::Ref(ref_name), loc);
                     self.curr_func_mut().append_instr(Bc::BinOp(BinOp::Gt), loc);
                     let idx = self.curr_func().next_instr_idx();
                     self.curr_func_mut().append_instr(Bc::Branch(0), loc);
@@ -282,8 +291,9 @@ impl<'src> Parser<'src> {
                     self.parse_scope()?;
                 }
                 ParseState::ForInc { counter_name, loc } => {
+                    let counter_name = self.pooled_str(counter_name);
                     self.curr_func_mut()
-                        .append_instr(Bc::Ref(counter_name), loc);
+                        .append_instr(Bc::Ref(counter_name.clone()), loc);
                     self.curr_func_mut().append_instr(Bc::Imm(Val::Int(1)), loc);
                     self.curr_func_mut()
                         .append_instr(Bc::BinOp(BinOp::Add), loc);
@@ -308,6 +318,7 @@ impl<'src> Parser<'src> {
                     }
                 }
                 ParseState::Assign { lhs, loc } => {
+                    let lhs = self.pooled_str(lhs);
                     self.curr_func_mut().append_instr(Bc::Store(lhs), loc);
                 }
                 ParseState::IndexAssign => {
@@ -464,8 +475,8 @@ impl<'src> Parser<'src> {
                                 }
                             }
                         }
-                        self.curr_func_mut()
-                            .append_instr(Bc::Imm(Val::from_str(value)), loc);
+                        let val = Val::String(self.pooled_str(&value));
+                        self.curr_func_mut().append_instr(Bc::Imm(val), loc);
                         self.advance()?;
                     }
                     TokenLoc {
@@ -489,9 +500,10 @@ impl<'src> Parser<'src> {
                                     });
                                 };
                                 self.advance()?;
+                                let name = self.pooled_str(name);
                                 self.curr_func_mut().append_instr(Bc::Ref(name), loc);
-                                self.curr_func_mut()
-                                    .append_instr(Bc::Imm(Val::from_str(field)), loc);
+                                let field = Val::String(self.pooled_str(field));
+                                self.curr_func_mut().append_instr(Bc::Imm(field), loc);
                                 self.curr_func_mut().append_instr(Bc::Get, loc);
                             }
                             Some(TokenLoc {
@@ -499,6 +511,7 @@ impl<'src> Parser<'src> {
                                 ..
                             }) => {
                                 self.advance()?;
+                                let name = self.pooled_str(name);
                                 self.curr_func_mut().append_instr(Bc::Ref(name), loc);
                                 self.push_state(ParseState::IndexGet { loc });
                                 self.push_state(ParseState::Expr);
@@ -511,6 +524,7 @@ impl<'src> Parser<'src> {
                                 self.push_state(ParseState::Call { name, args: 0, loc });
                             }
                             _ => {
+                                let name = self.pooled_str(name);
                                 self.curr_func_mut().append_instr(Bc::Ref(name), loc);
                             }
                         }
@@ -540,7 +554,7 @@ impl<'src> Parser<'src> {
                     } => {
                         self.advance()?;
                         let args = self.parse_func_args()?;
-                        let func = self.text.add_func(format!("<func @ {loc}>"), args);
+                        let func = self.text.add_func(format!("<func @ {loc}>").into(), args);
                         self.push_state(ParseState::Func {
                             func,
                             name: None,
@@ -562,6 +576,7 @@ impl<'src> Parser<'src> {
                 }
                 ParseState::Call { name, args, loc } => {
                     if let Token::RParen = self.expect_curr_tok()?.token {
+                        let name = self.pooled_str(name);
                         self.curr_func_mut()
                             .append_instr(Bc::Call { name, args }, loc);
                         self.advance()?;
@@ -601,8 +616,8 @@ impl<'src> Parser<'src> {
                         {
                             self.advance()?;
                             expect_token!(self, Token::Assign);
-                            self.curr_func_mut()
-                                .append_instr(Bc::Imm(Val::from_str(field)), loc);
+                            let val = Val::String(self.pooled_str(field));
+                            self.curr_func_mut().append_instr(Bc::Imm(val), loc);
                             self.push_state(ParseState::Table {
                                 count: count + 1,
                                 field: Some(loc),
@@ -664,11 +679,12 @@ impl<'src> Parser<'src> {
                     Some(TokenLoc {
                         token: Token::Dot, ..
                     }) => {
+                        let lhs = self.pooled_str(lhs);
                         self.curr_func_mut().append_instr(Bc::Ref(lhs), loc);
                         self.advance()?; // Identifier (var)
                         self.advance()?; // Dot
                         let TokenLoc {
-                            token: Token::Ident(lhs),
+                            token: Token::Ident(ident),
                             loc,
                         } = self.expect_curr_tok()?
                         else {
@@ -679,8 +695,8 @@ impl<'src> Parser<'src> {
                         };
                         self.advance()?; // Identifier (field)
                         expect_token!(self, Token::Assign);
-                        self.curr_func_mut()
-                            .append_instr(Bc::Imm(Val::from_str(lhs)), loc);
+                        let val = Val::String(self.pooled_str(ident));
+                        self.curr_func_mut().append_instr(Bc::Imm(val), loc);
                         self.push_state(ParseState::IndexSet { loc });
                         self.push_state(ParseState::Expr);
                     }
@@ -688,6 +704,7 @@ impl<'src> Parser<'src> {
                         token: Token::LBrack,
                         ..
                     }) => {
+                        let lhs = self.pooled_str(lhs);
                         self.curr_func_mut().append_instr(Bc::Ref(lhs), loc);
                         self.advance()?; // Identifier (var)
                         self.advance()?; // LBrack
@@ -787,20 +804,20 @@ impl<'src> Parser<'src> {
     }
 
     /// Parses function arguments.
-    fn parse_func_args<'a>(&'a mut self) -> Result<Vec<&'src str>> {
+    fn parse_func_args(&mut self) -> Result<Vec<Rc<str>>> {
         expect_token!(self, Token::LParen);
         let curr_tok = self.expect_curr_tok()?;
         let mut args = Vec::new();
         if let Token::Ident(ident) = curr_tok.token {
-            args.push(ident);
+            args.push(ident.into());
             self.advance()?;
         }
         let mut curr_tok = self.expect_curr_tok()?;
         while let Token::Comma = curr_tok.token {
             self.advance()?;
             curr_tok = self.expect_curr_tok()?;
-            if let Token::Ident(id) = curr_tok.token {
-                args.push(id);
+            if let Token::Ident(ident) = curr_tok.token {
+                args.push(ident.into());
                 self.advance()?;
                 curr_tok = self.expect_curr_tok()?;
             } else {
@@ -814,13 +831,25 @@ impl<'src> Parser<'src> {
         Ok(args)
     }
 
+    /// If the given string is already in the string pool, returns a `Rc` to it.
+    /// Otherwise, it adds the string to the pool and returns a `Rc` to it.
+    fn pooled_str(&mut self, string: &str) -> Rc<str> {
+        if let Some(rc_str) = self.str_pool.get(string) {
+            rc_str.clone()
+        } else {
+            let rc_str: Rc<str> = string.into();
+            self.str_pool.insert(rc_str.clone());
+            rc_str
+        }
+    }
+
     /// Pushes the given function reference onto the function stack.
     fn push_func(&mut self, func: FuncRef) {
         self.func_stack.push(func);
     }
 
     /// Returns a mutable reference to the currently parsed function.
-    fn curr_func_mut(&mut self) -> &mut Func<'src> {
+    fn curr_func_mut(&mut self) -> &mut Func {
         &mut self.text[*self
             .func_stack
             .last()
@@ -828,7 +857,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Returns a reference to the currently parsed function.
-    fn curr_func(&mut self) -> &Func<'src> {
+    fn curr_func(&mut self) -> &Func {
         &self.text[*self
             .func_stack
             .last()
@@ -939,7 +968,10 @@ mod tests {
                         .func_ref(func)
                         .expect(&format!("Function {func} should exist"));
                     let func = &text[refe];
-                    assert_eq!(func.iter_args().collect::<Vec<&str>>(), *args);
+                    assert_eq!(
+                        func.iter_args().map(|s| s.as_ref()).collect::<Vec<&str>>(),
+                        *args
+                    );
                     for (i, instr) in instrs.iter().enumerate() {
                         assert_eq!(*func.instr_at(BcIdx(i as u32)), *instr);
                     }

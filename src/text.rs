@@ -1,18 +1,18 @@
 use crate::FuncRef;
 
 use super::{BinOp, SourceLoc, UnOp, Val};
-use std::{collections::HashMap, fmt, ops};
+use std::{collections::HashMap, fmt, ops, rc::Rc};
 
 /// Bytecode instruction.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum Bc<'src> {
+pub(super) enum Bc {
     Imm(Val),
-    Ref(&'src str),
+    Ref(Rc<str>),
     UnOp(UnOp),
     BinOp(BinOp),
-    Call { name: &'src str, args: u32 },
+    Call { name: Rc<str>, args: u32 },
     Table,
-    Store(&'src str),
+    Store(Rc<str>),
     Set,
     Get,
     Push,
@@ -23,7 +23,7 @@ pub(super) enum Bc<'src> {
     Ret,
 }
 
-impl fmt::Display for Bc<'_> {
+impl fmt::Display for Bc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Bc::Imm(Val::Float(float)) => write!(f, "val {float:?}"),
@@ -48,13 +48,13 @@ impl fmt::Display for Bc<'_> {
 
 /// Interpretable function with a name, arguments, a block of bytecode, and corresponding source locations.
 #[derive(Debug, Clone)]
-pub(super) struct Func<'src> {
+pub(super) struct Func {
     /// Name of the function.
-    name: String,
+    name: Rc<str>,
     /// Ordered argument names.
-    args: Vec<&'src str>,
+    args: Vec<Rc<str>>,
     /// Bytecode instructions of the function.
-    instrs: Vec<Bc<'src>>,
+    instrs: Vec<Bc>,
     /// Source locations of the instructions.
     locs: Vec<SourceLoc>,
 }
@@ -63,30 +63,30 @@ pub(super) struct Func<'src> {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct BcIdx(pub(super) u32);
 
-impl<'src> Func<'src> {
+impl Func {
     /// Returns the index of the next instruction that would be appended.
     pub(super) fn next_instr_idx(&self) -> BcIdx {
         BcIdx(self.instrs.len() as u32)
     }
 
     /// Appends an instruction to the function.
-    pub(super) fn append_instr(&mut self, instr: Bc<'src>, loc: SourceLoc) {
+    pub(super) fn append_instr(&mut self, instr: Bc, loc: SourceLoc) {
         self.instrs.push(instr);
         self.locs.push(loc);
     }
 
     /// Returns a reference to the instruction at the specified index.
-    pub(super) fn instr_at(&self, BcIdx(idx): BcIdx) -> &Bc<'src> {
+    pub(super) fn instr_at(&self, BcIdx(idx): BcIdx) -> &Bc {
         &self.instrs[idx as usize]
     }
 
     /// Returns a reference to the last instruction, if any.
-    pub(super) fn instr_last(&self) -> Option<&Bc<'src>> {
+    pub(super) fn instr_last(&self) -> Option<&Bc> {
         self.instrs.last()
     }
 
     /// Returns a mutable reference to the instruction at the specified index.
-    pub(super) fn instr_at_mut(&mut self, BcIdx(idx): BcIdx) -> &mut Bc<'src> {
+    pub(super) fn instr_at_mut(&mut self, BcIdx(idx): BcIdx) -> &mut Bc {
         &mut self.instrs[idx as usize]
     }
 
@@ -101,12 +101,12 @@ impl<'src> Func<'src> {
     }
 
     /// Returns an iterator over the function's arguments.
-    pub(super) fn iter_args(&self) -> impl DoubleEndedIterator<Item = &str> {
-        self.args.iter().copied()
+    pub(super) fn iter_args(&self) -> impl DoubleEndedIterator<Item = &Rc<str>> {
+        self.args.iter()
     }
 
     /// Returns an iterator over the function's instructions.
-    pub(super) fn iter_instrs(&self) -> impl Iterator<Item = &Bc<'src>> {
+    pub(super) fn iter_instrs(&self) -> impl Iterator<Item = &Bc> {
         self.instrs.iter()
     }
 
@@ -134,16 +134,16 @@ impl ops::AddAssign<i32> for BcIdx {
 
 /// A collection of functions and their bytecode.
 #[derive(Debug, Clone, Default)]
-pub(super) struct Text<'src> {
+pub(super) struct Text {
     /// All functions in the `Text`.
-    funcs: Vec<Func<'src>>,
+    funcs: Vec<Func>,
     /// Map from function names to their references.
-    func_refs: HashMap<String, FuncRef>,
+    func_refs: HashMap<Rc<str>, FuncRef>,
 }
 
-impl<'src> Text<'src> {
+impl Text {
     /// Adds the given function to the `Text`.
-    pub(super) fn add_func(&mut self, name: String, args: Vec<&'src str>) -> FuncRef {
+    pub(super) fn add_func(&mut self, name: Rc<str>, args: Vec<Rc<str>>) -> FuncRef {
         let idx = self.funcs.len();
         let refe = FuncRef(idx as u32);
         self.func_refs.insert(name.clone(), refe);
@@ -168,21 +168,21 @@ impl<'src> Text<'src> {
     }
 }
 
-impl<'src> ops::Index<FuncRef> for Text<'src> {
-    type Output = Func<'src>;
+impl ops::Index<FuncRef> for Text {
+    type Output = Func;
 
     fn index(&self, FuncRef(refe): FuncRef) -> &Self::Output {
         &self.funcs[refe as usize]
     }
 }
 
-impl ops::IndexMut<FuncRef> for Text<'_> {
+impl ops::IndexMut<FuncRef> for Text {
     fn index_mut(&mut self, FuncRef(refe): FuncRef) -> &mut Self::Output {
         &mut self.funcs[refe as usize]
     }
 }
 
-impl fmt::Display for Text<'_> {
+impl fmt::Display for Text {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for func in self.iter() {
             write!(f, "fn {name} (", name = func.name)?;

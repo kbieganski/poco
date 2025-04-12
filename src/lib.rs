@@ -50,7 +50,7 @@ pub enum ErrorDetail {
     /// An operation was attempted on incompatible types.
     TypeError,
     /// An undefined variable was referenced during evaluation.
-    Undefined(String),
+    Undefined(Rc<str>),
     /// An internal error occurred; indicates a bug.
     InternalError(&'static str),
 }
