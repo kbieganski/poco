@@ -238,7 +238,7 @@ impl Val {
         }
     }
 
-    /// Performs a logical NOT on the value
+    /// Performs a logical NOT on the value.
     #[inline(always)]
     fn not(&self) -> Self {
         use Val::*;
@@ -250,6 +250,7 @@ impl Val {
     }
 }
 
+/// Subset of `Val` that can be used as a key in a table.
 #[derive(Debug, Clone, PartialEq, Hash, PartialOrd, Ord)]
 enum Key {
     Bool(bool),
