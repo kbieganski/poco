@@ -95,6 +95,7 @@ impl EvalError {
 
 impl Val {
     /// Adds two values together.
+    #[inline(always)]
     fn add(&self, other: &Self) -> EvalResult<Self> {
         use Val::*;
         Ok(match (self, other) {
@@ -108,6 +109,7 @@ impl Val {
     }
 
     /// Subtracts one value from another.
+    #[inline(always)]
     fn sub(&self, other: &Self) -> EvalResult<Self> {
         use Val::*;
         Ok(match (self, other) {
@@ -120,6 +122,7 @@ impl Val {
     }
 
     /// Multiplies two values together.
+    #[inline(always)]
     fn mul(&self, other: &Self) -> EvalResult<Self> {
         use Val::*;
         Ok(match (self, other) {
@@ -132,6 +135,7 @@ impl Val {
     }
 
     /// Divides one value by another.
+    #[inline(always)]
     fn div(&self, other: &Self) -> EvalResult<Self> {
         use Val::*;
         Ok(match (self, other) {
@@ -144,6 +148,7 @@ impl Val {
     }
 
     /// Computes the modulus of one value by another.
+    #[inline(always)]
     fn modu(&self, other: &Self) -> EvalResult<Self> {
         use Val::*;
         Ok(match (self, other) {
@@ -153,6 +158,7 @@ impl Val {
     }
 
     /// Negates the value.
+    #[inline(always)]
     fn neg(&self) -> EvalResult<Val> {
         Ok(match self {
             Val::Int(int) => Val::Int(-int),
@@ -162,6 +168,7 @@ impl Val {
     }
 
     /// Compares if one value is less than another.
+    #[inline(always)]
     fn lt(&self, other: &Self) -> EvalResult<Self> {
         use Val::*;
         Ok(match (self, other) {
@@ -174,6 +181,7 @@ impl Val {
     }
 
     /// Compares if one value is less than or equal to another.
+    #[inline(always)]
     fn leq(&self, other: &Self) -> EvalResult<Self> {
         use Val::*;
         Ok(match (self, other) {
@@ -186,6 +194,7 @@ impl Val {
     }
 
     /// Compares if two values are equal.
+    #[inline(always)]
     fn eq(&self, other: &Self) -> EvalResult<Self> {
         use Val::*;
         Ok(match (self, other) {
@@ -204,6 +213,7 @@ impl Val {
     }
 
     /// Performs a logical AND operation between two values.
+    #[inline(always)]
     fn and(&self, other: &Self) -> Self {
         use Val::*;
         match &(self, other) {
@@ -216,6 +226,7 @@ impl Val {
     }
 
     /// Performs a logical OR operation between two values.
+    #[inline(always)]
     fn or(&self, other: &Self) -> Self {
         use Val::*;
         match &(self, other) {
@@ -228,6 +239,7 @@ impl Val {
     }
 
     /// Performs a logical NOT on the value
+    #[inline(always)]
     fn not(&self) -> Self {
         use Val::*;
         match self {
