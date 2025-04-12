@@ -1168,6 +1168,11 @@ mod tests {
         Int(7)
     );
     eval_test!(table_get_2, "t = [x = 4, y = 7, z = 11]\nreturn t.w", None);
+    eval_test!(
+        big_table,
+        "t = []\nfor i in 0..1000 {\nt[str(i)] = float(i)}\nreturn t[\"999\"]",
+        Float(999.0)
+    );
     eval_test!(if_1, "if true { return true }", Bool(true));
     eval_test!(if_2, "if false { return false }", None);
     eval_test!(
