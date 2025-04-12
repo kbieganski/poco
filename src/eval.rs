@@ -215,38 +215,25 @@ impl Val {
     /// Performs a logical AND operation between two values.
     #[inline(always)]
     fn and(&self, other: &Self) -> Self {
-        use Val::*;
-        match &(self, other) {
-            (Bool(false), _) => Bool(false),
-            (_, Bool(false)) => Bool(false),
-            (_, None) => Bool(false),
-            (None, _) => Bool(false),
-            _ => Bool(true),
-        }
+        Val::Bool(self.as_bool() && other.as_bool())
     }
 
     /// Performs a logical OR operation between two values.
     #[inline(always)]
     fn or(&self, other: &Self) -> Self {
-        use Val::*;
-        match &(self, other) {
-            (Bool(false), Bool(false))
-            | (Bool(false), None)
-            | (None, Bool(false))
-            | (None, None) => Bool(false),
-            _ => Bool(true),
-        }
+        Val::Bool(self.as_bool() || other.as_bool())
     }
 
     /// Performs a logical NOT on the value.
     #[inline(always)]
     fn not(&self) -> Self {
+        Val::Bool(!self.as_bool())
+    }
+
+    #[inline(always)]
+    fn as_bool(&self) -> bool {
         use Val::*;
-        match self {
-            None => Bool(true),
-            Bool(b) => Bool(!b),
-            _ => Bool(false),
-        }
+        !matches!(self, None | Bool(false))
     }
 }
 
@@ -982,7 +969,7 @@ impl Process {
                 self.stack.pop_scope(&mut self.heap)?;
             }
             Bc::Branch(offset) => {
-                if let Val::Bool(false) = self.stack.pop_val()? {
+                if !self.stack.pop_val()?.as_bool() {
                     self.stack.move_ip_by(*offset);
                 }
             }
@@ -1185,6 +1172,9 @@ mod tests {
         "if false { return true } else { return false }",
         Bool(false)
     );
+    eval_test!(if_coerce_1, "if 1 { return true }", Bool(true));
+    eval_test!(if_coerce_2, "if 0 { return true }", Bool(true));
+    eval_test!(if_coerce_3, "t = []\nif t.x { return true }", None);
     eval_test!(
         loop_while,
         "x = 2\nwhile x < 1024 {\nx = x * x}\nreturn x",
