@@ -360,8 +360,12 @@ impl Table {
                 self.set(key, value);
             }
             Table::FlatMap(map) => {
-                if let Err(idx) = map.binary_search_by_key(&&key, |(k, _)| k) {
-                    map.insert(idx, (key, value))
+                match map.binary_search_by_key(&&key, |(k, _)| k) {
+                    Ok(idx) => {
+                        let (_, val) = &mut map[idx];
+                        *val = value;
+                    }
+                    Err(idx) => map.insert(idx, (key, value)),
                 }
                 if map.len() > Self::FLAT_MAP_LIMIT {
                     let elems = take(map).into_iter().collect();
@@ -1152,7 +1156,12 @@ mod tests {
     eval_test!(table_array, "return [1, 2, 3]", Table[Int(1), Int(2), Int(3)]);
     eval_test!(table_map, "return [x = 4, y = 2]", Table[x = Int(4), y = Int(2)]);
     eval_test!(assign, "x = 1\nreturn x", Int(1));
-    eval_test!(table_set, "t = [1]\nt[0] = 2\nreturn t", Table[Int(2)]);
+    eval_test!(table_set_1, "t = [1]\nt[0] = 2\nreturn t", Table[Int(2)]);
+    eval_test!(
+        table_set_2,
+        "t = []\nt[\"foo\"] = 1\nt[\"foo\"] = 2\nreturn t",
+        Table[foo = Int(2)]
+    );
     eval_test!(
         table_get_1,
         "t = [x = 4, y = 7, z = 11]\nreturn t.y",
