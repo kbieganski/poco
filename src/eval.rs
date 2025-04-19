@@ -564,30 +564,42 @@ impl Stack {
     }
 
     /// Pushes a new scope onto the stack.
-    fn push_scope(&mut self) -> &mut Table {
+    fn push_scope(&mut self) {
         self.scope_count += 1;
         if self.scope_count >= self.scopes.len() {
             self.scopes.push(Table::default());
         }
-        &mut self.scopes[self.scope_count - 1]
     }
 
     /// Pushes a new call frame onto the stack.
-    fn push_frame(
+    fn push_frame<'a>(
         &mut self,
         func: FuncRef,
         fallback_scopes: Rc<[TableRef]>,
-        args: u32,
-    ) -> EvalResult<&mut Table> {
+        arg_count: u32,
+        args: impl Iterator<Item = &'a Rc<str>>,
+    ) -> EvalResult<()> {
+        let first_arg = self.vals.len() - arg_count as usize;
         self.frames.push(Frame {
             func,
             fallback_scopes,
             heap_scopes: Default::default(),
-            vals_idx: self.vals.len() - args as usize,
+            vals_idx: first_arg,
             ip: BcIdx(0),
             scope_idx: self.scope_count,
         });
-        Ok(self.push_scope())
+        self.push_scope();
+        let scope = &mut self.scopes[self.scope_count - 1];
+        for (i, arg) in args.enumerate() {
+            let val = if let Some(val) = self.vals.get_mut(first_arg + i) {
+                std::mem::replace(val, Val::None)
+            } else {
+                Val::None
+            };
+            scope.set(Key::String(arg.clone()), val);
+        }
+        self.vals.truncate(first_arg);
+        Ok(())
     }
 
     /// Pushes a value onto the value stack.
@@ -964,18 +976,8 @@ impl Process {
             Bc::Call { name, args } => {
                 let func = self.stack.get(&self.heap, name)?.clone();
                 if let Val::Closure { func, scopes } = func {
-                    self.stack.push_frame(func, scopes, *args)?;
-                    let func = &self.text[func];
-                    let mut vals = self.stack.pop_vals(*args).into_iter();
-                    for arg in func.iter_args() {
-                        let scope = self.stack.curr_scope_mut(&mut self.heap)?;
-                        let val = if let Some(val) = vals.next() {
-                            val
-                        } else {
-                            Val::None
-                        };
-                        scope.set(Key::String(arg.clone()), val);
-                    }
+                    let iter_args = self.text[func].iter_args();
+                    self.stack.push_frame(func, scopes, *args, iter_args)?;
                     return Ok(());
                 } else if let Val::ForeignFunc(func) = func {
                     let vals = self.stack.pop_vals(*args);
