@@ -484,6 +484,7 @@ impl Heap {
     }
 
     /// Drops a table from the heap.
+    #[allow(dead_code)]
     fn drop(&mut self, TableRef(refe): TableRef) {
         let idx = refe as usize;
         if idx == self.tables.len() - 1 {
@@ -514,6 +515,8 @@ struct Frame {
     func: FuncRef,
     /// Scopes to look up variables in if not found in the current frame's scopes.
     fallback_scopes: Rc<[TableRef]>,
+    /// Scopes of the current frame that were captured and put on the heap.
+    heap_scopes: Vec<TableRef>,
     /// Current instruction pointer.
     ip: BcIdx,
     /// The index of the frame in the global value stack.
@@ -522,56 +525,37 @@ struct Frame {
     scope_idx: usize,
 }
 
-/// A scope in the stack.
-struct Scope {
-    /// Table that represents this scope.
-    table: TableRef,
-    /// If true, this scope is captured and should not be dropped.
-    escapes: bool,
-}
-
-/// Creates a new scope in the heap.
-impl Scope {
-    fn new(heap: &mut Heap) -> Self {
-        Self {
-            table: heap.make(),
-            escapes: false,
-        }
-    }
-}
-
 /// A stack of call frames and scopes.
 struct Stack {
     /// Call frames in the stack.
     frames: Vec<Frame>,
     /// Scopes that belong to the frames in the call stack.
-    scopes: Vec<Scope>,
+    scopes: Vec<Table>,
     /// Value stack for expression evaluation.
     vals: Vec<Val>,
 }
 
 impl Stack {
     /// Creates a new stack with the given function and heap.
-    fn new(func: FuncRef, heap: &mut Heap) -> Self {
+    fn new(func: FuncRef) -> Self {
         Self {
             frames: vec![Frame {
                 func,
                 fallback_scopes: Default::default(),
+                heap_scopes: Default::default(),
                 vals_idx: Default::default(),
                 ip: BcIdx(0),
                 scope_idx: 0,
             }],
-            scopes: vec![Scope::new(heap)],
+            scopes: vec![Default::default()],
             vals: Default::default(),
         }
     }
 
     /// Pushes a new scope onto the stack.
-    fn push_scope(&mut self, heap: &mut Heap) -> TableRef {
-        let new_scope = Scope::new(heap);
-        let table = new_scope.table;
-        self.scopes.push(new_scope);
-        table
+    fn push_scope(&mut self) -> &mut Table {
+        self.scopes.push(Table::default());
+        self.scopes.last_mut().unwrap()
     }
 
     /// Pushes a new call frame onto the stack.
@@ -579,17 +563,17 @@ impl Stack {
         &mut self,
         func: FuncRef,
         fallback_scopes: Rc<[TableRef]>,
-        heap: &mut Heap,
         args: u32,
-    ) -> EvalResult<TableRef> {
+    ) -> EvalResult<&mut Table> {
         self.frames.push(Frame {
             func,
             fallback_scopes,
+            heap_scopes: Default::default(),
             vals_idx: self.vals.len() - args as usize,
             ip: BcIdx(0),
             scope_idx: self.scopes.len(),
         });
-        Ok(self.push_scope(heap))
+        Ok(self.push_scope())
     }
 
     /// Pushes a value onto the value stack.
@@ -621,11 +605,16 @@ impl Stack {
     /// Gets a value from the current frame's scope or fallback scopes.
     fn get<'a>(&'a self, heap: &'a Heap, name: &Rc<str>) -> EvalResult<&'a Val> {
         let frame = self.curr_frame();
-        for scope in self.scopes[frame.scope_idx..]
+        for scope in self.scopes[frame.scope_idx..].iter().rev() {
+            if let Some(val) = scope.get(&Key::String(name.clone())) {
+                return Ok(val);
+            }
+        }
+        for scope in frame
+            .heap_scopes
             .iter()
-            .rev()
-            .map(|scope| scope.table)
-            .chain(frame.fallback_scopes.iter().copied())
+            .chain(frame.fallback_scopes.iter())
+            .copied()
         {
             if let Some(val) = heap.get(scope).get(&Key::String(name.clone())) {
                 return Ok(val);
@@ -636,14 +625,21 @@ impl Stack {
 
     /// Sets a value in the current frame's scope or fallback scopes.
     fn set(&mut self, heap: &mut Heap, name: &Rc<str>, new_val: Val) -> EvalResult<()> {
-        let frame = self.curr_frame();
+        let scope_idx = self.curr_frame().scope_idx;
         let key = Key::String(name.clone());
         // Find tightest scope with given var
-        for scope in self.scopes[frame.scope_idx..]
+        for scope in self.scopes[scope_idx..].iter_mut().rev() {
+            if let Some(val) = scope.get_mut(&key) {
+                *val = new_val;
+                return Ok(());
+            }
+        }
+        let frame = self.curr_frame();
+        for scope in frame
+            .heap_scopes
             .iter()
-            .rev()
-            .map(|scope| scope.table)
-            .chain(frame.fallback_scopes.iter().copied())
+            .chain(frame.fallback_scopes.iter())
+            .copied()
         {
             if let Some(val) = heap.get_mut(scope).get_mut(&key) {
                 *val = new_val;
@@ -651,39 +647,47 @@ impl Stack {
             }
         }
         // Var not declared, declare in current scope
-        heap.get_mut(self.curr_scope()?).set(key, new_val);
+        self.curr_scope_mut(heap)?.set(key, new_val);
         Ok(())
     }
 
     /// Pops the current scope from the stack.
-    fn pop_scope(&mut self, heap: &mut Heap) -> EvalResult<()> {
-        let Some(scope) = self.scopes.pop() else {
-            return Err(EvalError::InternalError("No scope"));
-        };
-        if !scope.escapes {
-            heap.drop(scope.table);
+    fn pop_scope(&mut self) -> EvalResult<()> {
+        if self.scopes.pop().is_some() || self.curr_frame_mut().heap_scopes.pop().is_some() {
+            Ok(())
+        } else {
+            Err(EvalError::InternalError("No scope"))
         }
-        Ok(())
     }
 
     /// Pops the current call frame from the stack.
-    fn pop_frame(&mut self, heap: &mut Heap) -> EvalResult<()> {
+    fn pop_frame(&mut self) -> EvalResult<()> {
         if self.frames.len() == 1 {
             return Err(EvalError::InternalError("Cannot pop bottom frame"));
         };
         let frame = self.frames.pop().expect("Should have at least one frame");
         while self.scopes.len() > frame.scope_idx {
-            self.pop_scope(heap)?;
+            self.pop_scope()?;
         }
         Ok(())
     }
 
-    /// Returns a reference to the current scope.
-    fn curr_scope(&self) -> EvalResult<TableRef> {
-        let Some(scope) = self.scopes.last() else {
-            return Err(EvalError::InternalError("No scope"));
-        };
-        Ok(scope.table)
+    // Returns a mutable reference to the current scope.
+    fn curr_scope_mut<'a>(&'a mut self, heap: &'a mut Heap) -> EvalResult<&'a mut Table> {
+        if let Some(scope) = self.scopes.last_mut() {
+            return Ok(scope);
+        }
+        let frame = self
+            .frames
+            .last()
+            .expect("Should have at least one call frame");
+        if let Some(scope) = frame.heap_scopes.last() {
+            Ok(heap.get_mut(*scope))
+        } else if let Some(scope) = frame.fallback_scopes.last() {
+            Ok(heap.get_mut(*scope))
+        } else {
+            Err(EvalError::InternalError("No scope"))
+        }
     }
 
     /// Returns a reference to the current call frame.
@@ -734,19 +738,16 @@ impl Stack {
     }
 
     /// Captures the current scopes and returns their references.
-    fn capture_scopes(&mut self) -> EvalResult<Rc<[TableRef]>> {
+    fn capture_scopes(&mut self, heap: &mut Heap) -> EvalResult<Rc<[TableRef]>> {
         let frame = self.frames.last_mut().expect("At least one call frame");
-        Ok(self
-            .scopes
-            .iter_mut()
-            .enumerate()
-            .rev()
-            .filter(|&(i, _)| i >= frame.scope_idx)
-            .map(|(_, s)| {
-                s.escapes = true;
-                s.table
-            })
-            .collect())
+        frame
+            .heap_scopes
+            .extend(self.scopes.drain(frame.scope_idx..).map(|scope| {
+                let refe = heap.make();
+                *heap.get_mut(refe) = scope;
+                refe
+            }));
+        Ok(self.curr_frame().heap_scopes.clone().into())
     }
 
     /// Returns true if the current frame's value stack is empty.
@@ -787,8 +788,10 @@ impl Process {
     fn new(text: Text) -> Self {
         let mut heap = Heap::default();
         let entry = FuncRef(0);
-        let stack = Stack::new(entry, &mut heap);
-        let top_scope = heap.get_mut(stack.curr_scope().expect("Should have scope at the start"));
+        let mut stack = Stack::new(entry);
+        let top_scope = stack
+            .curr_scope_mut(&mut heap)
+            .expect("Should have scope at the start");
         top_scope.set(
             Key::from_str("bool"),
             Val::from_fn(|args, _| {
@@ -899,7 +902,7 @@ impl Process {
         match instr {
             Bc::Imm(val) => match val {
                 &Val::Func(func) => {
-                    let scopes = self.stack.capture_scopes()?;
+                    let scopes = self.stack.capture_scopes(&mut self.heap)?;
                     self.stack.push_val(Val::Closure { func, scopes });
                 }
                 val => self.stack.push_val(val.clone()),
@@ -937,11 +940,11 @@ impl Process {
             Bc::Call { name, args } => {
                 let func = self.stack.get(&self.heap, name)?.clone();
                 if let Val::Closure { func, scopes } = func {
-                    let scope = self.stack.push_frame(func, scopes, &mut self.heap, *args)?;
+                    self.stack.push_frame(func, scopes, *args)?;
                     let func = &self.text[func];
                     let mut vals = self.stack.pop_vals(*args).into_iter();
                     for arg in func.iter_args() {
-                        let scope = self.heap.get_mut(scope);
+                        let scope = self.stack.curr_scope_mut(&mut self.heap)?;
                         let val = if let Some(val) = vals.next() {
                             val
                         } else {
@@ -981,10 +984,10 @@ impl Process {
                     .push_val(self.heap.get(refe).get(&key).cloned().unwrap_or(Val::None));
             }
             Bc::Push => {
-                self.stack.push_scope(&mut self.heap);
+                self.stack.push_scope();
             }
             Bc::Pop => {
-                self.stack.pop_scope(&mut self.heap)?;
+                self.stack.pop_scope()?;
             }
             Bc::Branch(offset) => {
                 if !self.stack.pop_val()?.as_bool() {
@@ -1005,7 +1008,7 @@ impl Process {
         }
 
         if !self.stack.at_bottom_frame() && self.stack.ip_at_end(&self.text) {
-            self.stack.pop_frame(&mut self.heap)?;
+            self.stack.pop_frame()?;
             if self.stack.no_frame_vals() {
                 self.stack.push_val(Val::None);
             }
