@@ -600,8 +600,17 @@ impl Stack {
     }
 
     /// Returns a reference to the top value on the value stack.
-    fn top_val(&mut self) -> Option<&Val> {
-        self.vals.last()
+    fn top_val(&self) -> EvalResult<&Val> {
+        self.vals
+            .last()
+            .ok_or(EvalError::InternalError("Unexpected empty value stack"))
+    }
+
+    /// Returns a mutable reference to the top value on the value stack.
+    fn top_val_mut(&mut self) -> EvalResult<&mut Val> {
+        self.vals
+            .last_mut()
+            .ok_or(EvalError::InternalError("Unexpected empty value stack"))
     }
 
     /// Gets a value from the current frame's scope or fallback scopes.
@@ -891,16 +900,16 @@ impl Process {
                 self.stack.push_val(val.clone());
             }
             Bc::UnOp(op) => {
-                let val = self.stack.pop_val()?;
-                match op {
-                    UnOp::Not => self.stack.push_val(val.not()),
-                    UnOp::Neg => self.stack.push_val(val.neg()?),
+                let val = self.stack.top_val_mut()?;
+                *val = match op {
+                    UnOp::Not => val.not(),
+                    UnOp::Neg => val.neg()?,
                 }
             }
             Bc::BinOp(op) => {
                 let right = self.stack.pop_val()?;
-                let left = self.stack.pop_val()?;
-                self.stack.push_val(match op {
+                let left = self.stack.top_val_mut()?;
+                *left = match op {
                     BinOp::Add => left.add(&right)?,
                     BinOp::Sub => left.sub(&right)?,
                     BinOp::Mul => left.mul(&right)?,
@@ -908,13 +917,13 @@ impl Process {
                     BinOp::Mod => left.modu(&right)?,
                     BinOp::Lt => left.lt(&right)?,
                     BinOp::Leq => left.leq(&right)?,
-                    BinOp::Gt => right.lt(&left)?,
-                    BinOp::Geq => right.leq(&left)?,
-                    BinOp::Eq => left.eq(&right)?,
-                    BinOp::Neq => left.eq(&right)?.not(),
+                    BinOp::Gt => right.lt(left)?,
+                    BinOp::Geq => right.leq(left)?,
+                    BinOp::Eq => (*left).eq(&right)?,
+                    BinOp::Neq => (*left).eq(&right)?.not(),
                     BinOp::And => left.and(&right),
                     BinOp::Or => left.or(&right),
-                });
+                };
             }
             Bc::Call { name, args } => {
                 let func = self.stack.get(&self.heap, name)?.clone();
@@ -949,7 +958,7 @@ impl Process {
             Bc::Set => {
                 let val = self.stack.pop_val()?;
                 let key = self.stack.pop_val()?.try_into()?;
-                let Some(Val::Table(refe)) = self.stack.top_val() else {
+                let Val::Table(refe) = self.stack.top_val()? else {
                     return Err(EvalError::TypeError);
                 };
                 self.heap.get_mut(*refe).set(key, val);
