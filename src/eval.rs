@@ -437,6 +437,14 @@ impl Table {
             Table::HashMap(map) => TableIter::HashMap(map.iter()),
         }
     }
+
+    fn clear(&mut self) {
+        match self {
+            Table::Array(array) => array.clear(),
+            Table::FlatMap(map) => map.clear(),
+            Table::HashMap(map) => map.clear(),
+        }
+    }
 }
 
 /// An iterator over the keys and elements in a table.
@@ -531,6 +539,8 @@ struct Stack {
     frames: Vec<Frame>,
     /// Scopes that belong to the frames in the call stack.
     scopes: Vec<Table>,
+    /// Number of scopes actually allocated on the stack (<= scopes.len()).
+    scope_count: usize,
     /// Value stack for expression evaluation.
     vals: Vec<Val>,
 }
@@ -548,14 +558,18 @@ impl Stack {
                 scope_idx: 0,
             }],
             scopes: vec![Default::default()],
+            scope_count: 1,
             vals: Default::default(),
         }
     }
 
     /// Pushes a new scope onto the stack.
     fn push_scope(&mut self) -> &mut Table {
-        self.scopes.push(Table::default());
-        self.scopes.last_mut().unwrap()
+        self.scope_count += 1;
+        if self.scope_count >= self.scopes.len() {
+            self.scopes.push(Table::default());
+        }
+        &mut self.scopes[self.scope_count - 1]
     }
 
     /// Pushes a new call frame onto the stack.
@@ -571,7 +585,7 @@ impl Stack {
             heap_scopes: Default::default(),
             vals_idx: self.vals.len() - args as usize,
             ip: BcIdx(0),
-            scope_idx: self.scopes.len(),
+            scope_idx: self.scope_count,
         });
         Ok(self.push_scope())
     }
@@ -605,7 +619,7 @@ impl Stack {
     /// Gets a value from the current frame's scope or fallback scopes.
     fn get<'a>(&'a self, heap: &'a Heap, name: &Rc<str>) -> EvalResult<&'a Val> {
         let frame = self.curr_frame();
-        for scope in self.scopes[frame.scope_idx..].iter().rev() {
+        for scope in self.scopes[frame.scope_idx..self.scope_count].iter().rev() {
             if let Some(val) = scope.get(&Key::String(name.clone())) {
                 return Ok(val);
             }
@@ -628,7 +642,7 @@ impl Stack {
         let scope_idx = self.curr_frame().scope_idx;
         let key = Key::String(name.clone());
         // Find tightest scope with given var
-        for scope in self.scopes[scope_idx..].iter_mut().rev() {
+        for scope in self.scopes[scope_idx..self.scope_count].iter_mut().rev() {
             if let Some(val) = scope.get_mut(&key) {
                 *val = new_val;
                 return Ok(());
@@ -653,7 +667,11 @@ impl Stack {
 
     /// Pops the current scope from the stack.
     fn pop_scope(&mut self) -> EvalResult<()> {
-        if self.scopes.pop().is_some() || self.curr_frame_mut().heap_scopes.pop().is_some() {
+        if self.scope_count > self.curr_frame().scope_idx {
+            self.scopes[self.scope_count - 1].clear();
+            self.scope_count -= 1;
+            Ok(())
+        } else if self.curr_frame_mut().heap_scopes.pop().is_some() {
             Ok(())
         } else {
             Err(EvalError::InternalError("No scope"))
@@ -666,7 +684,7 @@ impl Stack {
             return Err(EvalError::InternalError("Cannot pop bottom frame"));
         };
         let frame = self.frames.pop().expect("Should have at least one frame");
-        while self.scopes.len() > frame.scope_idx {
+        while self.scope_count > frame.scope_idx {
             self.pop_scope()?;
         }
         Ok(())
@@ -674,8 +692,8 @@ impl Stack {
 
     // Returns a mutable reference to the current scope.
     fn curr_scope_mut<'a>(&'a mut self, heap: &'a mut Heap) -> EvalResult<&'a mut Table> {
-        if let Some(scope) = self.scopes.last_mut() {
-            return Ok(scope);
+        if self.scope_count > self.curr_frame().scope_idx {
+            return Ok(&mut self.scopes[self.scope_count - 1]);
         }
         let frame = self
             .frames
@@ -740,13 +758,19 @@ impl Stack {
     /// Captures the current scopes and returns their references.
     fn capture_scopes(&mut self, heap: &mut Heap) -> EvalResult<Rc<[TableRef]>> {
         let frame = self.frames.last_mut().expect("At least one call frame");
+        let new_scope_count = self.scope_count - (self.scope_count - frame.scope_idx);
         frame
             .heap_scopes
-            .extend(self.scopes.drain(frame.scope_idx..).map(|scope| {
-                let refe = heap.make();
-                *heap.get_mut(refe) = scope;
-                refe
-            }));
+            .extend(
+                self.scopes
+                    .drain(frame.scope_idx..self.scope_count)
+                    .map(|scope| {
+                        let refe = heap.make();
+                        *heap.get_mut(refe) = scope;
+                        refe
+                    }),
+            );
+        self.scope_count = new_scope_count;
         Ok(self.curr_frame().heap_scopes.clone().into())
     }
 
