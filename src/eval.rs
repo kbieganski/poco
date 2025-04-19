@@ -683,12 +683,16 @@ impl Stack {
 
     /// Returns a reference to the current call frame.
     fn curr_frame(&self) -> &Frame {
-        self.frames.last().expect("At least one call frame")
+        self.frames
+            .last()
+            .expect("Should have at least one call frame")
     }
 
     /// Returns a mutable reference to the current call frame.
     fn curr_frame_mut(&mut self) -> &mut Frame {
-        self.frames.last_mut().expect("At least one call frame")
+        self.frames
+            .last_mut()
+            .expect("Should have at least one call frame")
     }
 
     /// Moves the instruction pointer by the specified offset.
