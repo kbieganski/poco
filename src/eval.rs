@@ -347,13 +347,13 @@ impl Table {
                 self.set(key, value);
             }
             Table::FlatMap(map) => {
-                match map.binary_search_by_key(&&key, |(k, _)| k) {
-                    Ok(idx) => {
-                        let (_, val) = &mut map[idx];
+                for (k, val) in map.iter_mut() {
+                    if *k == key {
                         *val = value;
+                        return;
                     }
-                    Err(idx) => map.insert(idx, (key, value)),
                 }
+                map.push((key, value));
                 if map.len() > Self::FLAT_MAP_LIMIT {
                     let elems = take(map).into_iter().collect();
                     *self = Table::HashMap(elems);
@@ -378,13 +378,14 @@ impl Table {
                 }
                 None
             }
-            Table::FlatMap(map) => match map.binary_search_by_key(&key, |(k, _)| k) {
-                Ok(idx) => {
-                    let (_, val) = &map[idx];
-                    Some(val)
+            Table::FlatMap(map) => {
+                for (k, val) in map {
+                    if k == key {
+                        return Some(val);
+                    }
                 }
-                Err(_) => None,
-            },
+                None
+            }
             Table::HashMap(map) => map.get(key),
         }
     }
@@ -402,10 +403,14 @@ impl Table {
                 }
                 None
             }
-            Table::FlatMap(map) => match map.binary_search_by_key(&key, |(k, _)| k) {
-                Ok(idx) => Some(&mut map[idx].1),
-                Err(_) => None,
-            },
+            Table::FlatMap(map) => {
+                for (k, val) in map {
+                    if k == key {
+                        return Some(val);
+                    }
+                }
+                None
+            }
             Table::HashMap(map) => map.get_mut(key),
         }
     }
