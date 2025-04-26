@@ -1219,6 +1219,11 @@ mod tests {
         "if false { return true } else { return false }",
         Bool(false)
     );
+    eval_test!(
+        if_else_if,
+        "x=0\nif false {\nx = 1\n} else if true {\nx = 2\n} else if false {\nx = 3\n} else {\nx = 4\n}\nreturn x",
+        Int(2)
+    );
     eval_test!(if_coerce_1, "if 1 { return true }", Bool(true));
     eval_test!(if_coerce_2, "if 0 { return true }", Bool(true));
     eval_test!(if_coerce_3, "t = []\nif t.x { return true }", None);

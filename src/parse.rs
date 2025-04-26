@@ -236,7 +236,18 @@ impl<'src> Parser<'src> {
                         self.advance()?;
                         self.push_state(ParseState::Else { idx });
                         target_idx = self.curr_func().next_instr_idx();
-                        self.parse_scope()?;
+
+                        if let Some(TokenLoc {
+                            token: Token::If,
+                            loc,
+                        }) = self.curr_tok
+                        {
+                            self.advance()?;
+                            self.push_state(ParseState::If { loc });
+                            self.push_state(ParseState::Expr);
+                        } else {
+                            self.parse_scope()?;
+                        }
                     }
                     *self.curr_func_mut().instr_at_mut(idx) = Bc::Branch(target_idx - idx - 1);
                 }
