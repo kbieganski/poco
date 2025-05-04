@@ -13,6 +13,7 @@ use std::{
     mem::{replace, take},
     rc::Rc,
     slice,
+    time::{Duration, Instant},
 };
 
 /// Executes the given bytecode in the form of a `Text`.
@@ -474,10 +475,12 @@ impl<'a> Iterator for TableIter<'a> {
 /// Stores all tables.
 #[derive(Debug, Clone, Default)]
 pub struct Heap {
-    /// All tables in the heap.
-    tables: Vec<Table>,
+    /// All tables in the heap. The first element of each tuple is a GC mark.
+    tables: Vec<(bool, Table)>,
     /// Available (freed) indices in the `tables` vector.
     free: Vec<TableRef>,
+    /// Buffer used for garbage collection.
+    gc_stack: Vec<usize>,
 }
 
 impl Heap {
@@ -491,28 +494,69 @@ impl Heap {
         TableRef(idx)
     }
 
-    /// Drops a table from the heap.
-    #[allow(dead_code)]
-    fn drop(&mut self, TableRef(refe): TableRef) {
-        let idx = refe as usize;
-        if idx == self.tables.len() - 1 {
-            self.tables.pop();
-        } else {
-            self.tables[idx] = Default::default();
-            self.free.push(TableRef(refe));
-        }
-    }
-
     /// Gets a reference to a table in the heap.
     pub fn get(&self, TableRef(refe): TableRef) -> &Table {
         let idx = refe as usize;
-        &self.tables[idx]
+        let (_, table) = &self.tables[idx];
+        table
     }
 
     /// Gets a mutable reference to a table in the heap.
     fn get_mut(&mut self, TableRef(refe): TableRef) -> &mut Table {
         let idx = refe as usize;
-        &mut self.tables[idx]
+        let (_, table) = &mut self.tables[idx];
+        table
+    }
+
+    /// Collects garbage from the heap.
+    fn gc<'a>(
+        &mut self,
+        stack: impl Iterator<Item = &'a Table>,
+        safe_tables: impl Iterator<Item = TableRef>,
+    ) {
+        self.gc_stack
+            .extend(safe_tables.map(|TableRef(refe)| refe as usize));
+        for scope in stack {
+            for (_, val) in scope.iter() {
+                if let &Val::Table(TableRef(refe)) = val {
+                    self.gc_stack.push(refe as usize);
+                }
+            }
+        }
+        while let Some(idx) = self.gc_stack.pop() {
+            let (mark, table) = &mut self.tables[idx];
+            if *mark {
+                continue;
+            }
+            *mark = true;
+            for (key, val) in table.iter() {
+                if let Val::Table(TableRef(refe)) = key {
+                    self.gc_stack.push(refe as usize);
+                }
+                if let &Val::Table(TableRef(refe)) = val {
+                    self.gc_stack.push(refe as usize);
+                }
+            }
+        }
+        for i in (0..self.tables.len()).rev() {
+            let (mark, _) = &mut self.tables[i];
+            if *mark {
+                *mark = false;
+                continue;
+            }
+            if i == self.tables.len() - 1 {
+                self.tables.pop();
+            } else {
+                self.tables[i] = Default::default();
+                self.free.push(TableRef(i as u32));
+            }
+        }
+    }
+
+    // Returns the number of tables in the heap.
+    #[cfg(test)]
+    fn table_count(&self) -> usize {
+        self.tables.len() - self.free.len()
     }
 }
 
@@ -817,6 +861,8 @@ struct Process {
     stack: Stack,
     /// Return value of the entire process.
     result: Val,
+    /// Time of the last garbage collection.
+    last_gc: Instant,
 }
 
 impl Process {
@@ -919,6 +965,7 @@ impl Process {
             heap,
             stack,
             result: Val::None,
+            last_gc: Instant::now(),
         }
     }
 
@@ -987,6 +1034,11 @@ impl Process {
                 }
             }
             Bc::Table => {
+                let now = Instant::now();
+                if now - self.last_gc > Duration::from_millis(1) {
+                    self.gc();
+                    self.last_gc = now;
+                }
                 self.stack.push_val(Val::Table(self.heap.make()));
             }
             Bc::Store(lhs) => {
@@ -1041,6 +1093,17 @@ impl Process {
         }
         self.stack.move_ip_by(1);
         Ok(())
+    }
+
+    // Performs garbage collection on the heap.
+    fn gc(&mut self) {
+        let stack = self.stack.scopes[..self.stack.scope_count].iter();
+        let safe_tables = self
+            .stack
+            .frames
+            .iter()
+            .flat_map(|frame| frame.heap_scopes.iter().copied());
+        self.heap.gc(stack, safe_tables);
     }
 
     /// Returns true if the process is done.
@@ -1251,4 +1314,78 @@ mod tests {
     eval_test!(error_1, "print(x)", Err(ErrorDetail::Undefined("x".into())), 0:6:6);
     eval_test!(error_2, "\nreturn\n1 + true", Err(ErrorDetail::TypeError), 2:2:10);
     eval_test!(error_3, "return int([])", Err(ErrorDetail::TypeError), 0:10:10);
+
+    macro_rules! gc_test {
+        ($name:ident, $source:literal, $count: literal $(,)?) => {
+            #[test]
+            fn $name() {
+                let source = crate::Source {
+                    name: format!("<{}>", stringify!($name)),
+                    contents: $source.to_owned(),
+                };
+                let mut parser = Parser::new(Lexer::new(&source));
+                let mut proc = Process::new(parser.parse().expect("Parsing should succeed"));
+                while !proc.is_done() {
+                    proc.step().expect("Eval should succeed");
+                }
+                proc.gc();
+                assert_eq!(proc.heap.table_count(), $count);
+            }
+        };
+    }
+    gc_test!(
+        gc_keep,
+        r#"
+            a = []
+            for i in 0..1000 {
+                a = [a]
+            }
+        "#,
+        1001,
+    );
+    gc_test!(
+        gc_free,
+        r#"
+            a = []
+            for i in 0..1000 {
+                a = [a]
+            }
+            a = 0
+        "#,
+        0,
+    );
+    gc_test!(
+        gc_cycle,
+        r#"
+            a = []
+            b = [a]
+            c = [b]
+            a[0] = c
+            a = 0
+            b = 0
+            c = 0
+        "#,
+        0,
+    );
+    gc_test!(
+        gc_cycle_2,
+        r#"
+            a = []
+            b = [a]
+            c = [b]
+            a[0] = c
+            a = 0
+            b = 0
+        "#,
+        3,
+    );
+    gc_test!(
+        gc_key,
+        r#"
+            a = []
+            b = [a = 0]
+            a = 0
+        "#,
+        2,
+    );
 }
